@@ -644,14 +644,6 @@ async function acquireMediaStream(userName, isInstructor) {
   } catch (errAudio) {
     console.warn('Hardware microphone unavailable or permission denied:', errAudio);
     stream = new MediaStream();
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (AudioCtx) {
-        const actx = new AudioCtx();
-        const dst = actx.createMediaStreamDestination();
-        dst.stream.getAudioTracks().forEach(t => stream.addTrack(t));
-      }
-    } catch (e) {}
   }
 
   // 3. Attach fallback canvas video track ONLY if no real video track exists
@@ -1254,14 +1246,18 @@ function ActiveRoomPage({
         hasRealVideo = stream.getVideoTracks().length > 0;
       }
 
-      // Guarantee at least 1 audio track so audio transceiver always negotiates
+      // If no audio track present, attempt to acquire a real hardware microphone track
       if (stream.getAudioTracks().length === 0) {
         try {
-          const actx = new (window.AudioContext || window.webkitAudioContext)();
-          const dst = actx.createMediaStreamDestination();
-          const silentAudio = dst.stream.getAudioTracks()[0];
-          if (silentAudio) stream.addTrack(silentAudio);
-        } catch(e) {}
+          const micOnlyStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const aTrack = micOnlyStream?.getAudioTracks()[0];
+          if (aTrack) {
+            aTrack.enabled = Boolean(initialMicOn);
+            stream.addTrack(aTrack);
+          }
+        } catch (e) {
+          console.warn('Initial microphone acquisition skipped or denied:', e);
+        }
       }
 
       // Guarantee at least 1 video track so video transceiver always negotiates
@@ -2349,7 +2345,36 @@ function ActiveRoomPage({
     const nextMic = !micOn;
 
     if (nextMic) {
-      // User is turning mic ON: Always ensure real live hardware microphone track!
+      // 1. If an existing live audio track is already available, re-enable it immediately
+      const existingAudioTrack = userStreamRef.current?.getAudioTracks()[0];
+      if (existingAudioTrack && existingAudioTrack.readyState === 'live') {
+        existingAudioTrack.enabled = true;
+        peersRef.current.forEach(p => {
+          try {
+            const pc = p.peer?._pc;
+            if (pc) {
+              const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'audio') || s.kind === 'audio');
+              if (sender) {
+                if (sender.track !== existingAudioTrack) {
+                  sender.replaceTrack(existingAudioTrack);
+                }
+              } else if (p.peer?.addTrack) {
+                p.peer.addTrack(existingAudioTrack, userStreamRef.current);
+              }
+            }
+          } catch (e) {
+            console.warn('Error syncing existing audio track to peer:', e);
+          }
+        });
+
+        setUserStream(new MediaStream(userStreamRef.current.getTracks()));
+        setMicOn(true);
+        socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn, micOn: true });
+        showToast('🎤 Microphone is live!');
+        return;
+      }
+
+      // 2. Otherwise acquire fresh hardware audio track
       try {
         let audioStream;
         try {
@@ -2391,7 +2416,6 @@ function ActiveRoomPage({
           });
 
           setUserStream(new MediaStream(userStreamRef.current.getTracks()));
-          setMicPermissionBlocked(false);
           setMicOn(true);
           socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn, micOn: true });
           showToast('🎤 Microphone is live!');
@@ -2399,7 +2423,6 @@ function ActiveRoomPage({
         }
       } catch (err) {
         console.warn('Microphone permission or hardware error:', err);
-        setMicPermissionBlocked(true);
         showToast('⚠️ Microphone permission required. Please allow mic in browser settings.');
         return;
       }
@@ -2674,82 +2697,7 @@ function ActiveRoomPage({
         </div>
       )}
 
-      {/* ── Microphone Blocked Helper Banner / Modal ── */}
-      {micPermissionBlocked && (
-        <div style={{
-          position: 'fixed',
-          top: 64,
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 99999,
-          maxWidth: 440,
-          width: '92%',
-          background: '#18181b',
-          color: '#f8fafc',
-          border: '1.5px solid #ef4444',
-          borderRadius: 12,
-          padding: '14px 18px',
-          boxShadow: '0 20px 40px rgba(0,0,0,0.6)'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span style={{ fontWeight: 700, fontSize: '0.96rem', display: 'flex', alignItems: 'center', gap: 6, color: '#f87171' }}>
-              🔒 Microphone Access Blocked
-            </span>
-            <button
-              type="button"
-              onClick={() => setMicPermissionBlocked(false)}
-              style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '1.2rem', cursor: 'pointer' }}
-            >
-              ✕
-            </button>
-          </div>
-          <p style={{ fontSize: '0.84rem', color: '#cbd5e1', lineHeight: 1.4, margin: '0 0 10px 0' }}>
-            Your browser blocked microphone access. To allow your voice:
-          </p>
-          <ol style={{ fontSize: '0.8rem', color: '#94a3b8', margin: '0 0 12px 18px', padding: 0, lineHeight: 1.5 }}>
-            <li>Tap the <strong>🔒 Lock icon</strong> next to the web address at the top of your screen.</li>
-            <li>Tap <strong>Permissions</strong> → <strong>Microphone</strong> → Select <strong>Allow</strong>.</li>
-            <li>Tap the button below to turn on your mic.</li>
-          </ol>
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button
-              type="button"
-              onClick={() => setMicPermissionBlocked(false)}
-              style={{
-                background: '#27272a',
-                color: '#94a3b8',
-                border: '1px solid #3f3f46',
-                borderRadius: 6,
-                padding: '6px 14px',
-                fontSize: '0.82rem',
-                fontWeight: 600,
-                cursor: 'pointer'
-              }}
-            >
-              Dismiss
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMicPermissionBlocked(false);
-                toggleMic();
-              }}
-              style={{
-                background: '#22c55e',
-                color: '#ffffff',
-                border: 'none',
-                borderRadius: 6,
-                padding: '6px 16px',
-                fontSize: '0.82rem',
-                fontWeight: 700,
-                cursor: 'pointer'
-              }}
-            >
-              🔄 Try Again
-            </button>
-          </div>
-        </div>
-      )}
+
 
       {/* ── Header ── */}
       <header className="room-header">
