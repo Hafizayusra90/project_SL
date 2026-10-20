@@ -14,8 +14,33 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [peerVolume, setPeerVolume] = useState(100);
 
-  const isVideoOn = mediaState?.videoOn !== false;
-  const isMicOn = mediaState?.micOn !== false;
+  const [streamTracks, setStreamTracks] = useState({ hasVideo: false, hasAudio: false });
+
+  // Monitor live remote stream tracks so state is never mismatched
+  useEffect(() => {
+    const evaluateTracks = (s) => {
+      if (!s) return;
+      const v = s.getVideoTracks?.() || [];
+      const a = s.getAudioTracks?.() || [];
+      setStreamTracks({
+        hasVideo: v.some(t => t.enabled && t.readyState === 'live'),
+        hasAudio: a.some(t => t.enabled && t.readyState === 'live')
+      });
+    };
+
+    const s = peer._remoteStreams?.[0] || peer.streams?.[0];
+    if (s) evaluateTracks(s);
+
+    peer.on('stream', evaluateTracks);
+    peer.on('track', (t, s) => evaluateTracks(s));
+    return () => {
+      peer.removeListener('stream', evaluateTracks);
+    };
+  }, [peer]);
+
+  // If mediaState is received from socket use it; otherwise fallback to whether stream actually has live track
+  const isVideoOn = mediaState !== undefined ? Boolean(mediaState?.videoOn) : streamTracks.hasVideo;
+  const isMicOn = mediaState !== undefined ? Boolean(mediaState?.micOn) : streamTracks.hasAudio;
   const isInstructorPeer = peerInfo?.userRole === 'instructor';
   const peerName = peerInfo?.userName || (isInstructorPeer ? 'Instructor' : 'Peer');
 
@@ -33,7 +58,17 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
         if (videoRef.current.srcObject !== stream) {
           videoRef.current.srcObject = stream;
         }
-        videoRef.current.play().catch(err => console.warn('Remote video play notice:', err));
+        const vPromise = videoRef.current.play();
+        if (vPromise !== undefined) {
+          vPromise.catch((err) => {
+            console.warn('Remote video play notice:', err);
+            // If browser autoplay policy rejects unmuted video before user tap, temporarily mute video element so video renders without black screen!
+            if (videoRef.current) {
+              videoRef.current.muted = true;
+              videoRef.current.play().catch(() => {});
+            }
+          });
+        }
       }
 
       if (audioRef.current) {
@@ -187,6 +222,9 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
         audioRef.current.play()
           .then(() => setAudioBlocked(false))
           .catch(() => {});
+      }
+      if (videoRef.current && videoRef.current.srcObject) {
+        videoRef.current.play().catch(() => {});
       }
     };
 
@@ -522,7 +560,11 @@ function createFallbackStream(userName, isInstructor) {
     .join('')
     .toUpperCase() || (isInstructor ? 'INS' : 'STU');
 
+  let step = 0;
   const drawAvatar = () => {
+    step = (step + 1) % 360;
+    const pulse = Math.sin((step * Math.PI) / 180) * 6;
+
     // Background gradient
     const grad = ctx.createLinearGradient(0, 0, 640, 480);
     grad.addColorStop(0, '#0f172a');
@@ -530,10 +572,10 @@ function createFallbackStream(userName, isInstructor) {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 640, 480);
 
-    // Outer glow ring
+    // Outer animated glow ring
     ctx.beginPath();
-    ctx.arc(320, 210, 85, 0, Math.PI * 2);
-    ctx.fillStyle = isInstructor ? 'rgba(99, 102, 241, 0.2)' : 'rgba(16, 185, 129, 0.2)';
+    ctx.arc(320, 210, 85 + pulse, 0, Math.PI * 2);
+    ctx.fillStyle = isInstructor ? 'rgba(99, 102, 241, 0.25)' : 'rgba(16, 185, 129, 0.25)';
     ctx.fill();
 
     // Inner avatar circle
@@ -559,12 +601,24 @@ function createFallbackStream(userName, isInstructor) {
 
     // Status subtitle
     ctx.font = '14px sans-serif';
-    ctx.fillStyle = '#94a3b8';
-    ctx.fillText('Virtual Feed Active', 320, 350);
+    ctx.fillStyle = '#38bdf8';
+    ctx.fillText('Virtual Video Active', 320, 350);
   };
 
   drawAvatar();
-  return canvas.captureStream ? canvas.captureStream(10) : null;
+  const stream = canvas.captureStream ? canvas.captureStream(15) : null;
+  const timer = setInterval(drawAvatar, 1000 / 15);
+  if (stream) {
+    const vTrack = stream.getVideoTracks()[0];
+    if (vTrack) {
+      const origStop = vTrack.stop.bind(vTrack);
+      vTrack.stop = () => {
+        clearInterval(timer);
+        origStop();
+      };
+    }
+  }
+  return stream;
 }
 
 // ── Acquire Real Media with Automatic Audio / Synthetic Fallback ──
@@ -1268,6 +1322,12 @@ function ActiveRoomPage({
         const peer = createPeer(userId, socket.id, activeMedia);
         peersRef.current.push({ peerID: userId, peer });
         setPeers(prev => [...prev.filter(p => p.peerID !== userId), { peerID: userId, peer }]);
+        // Immediately sync our current media state with the newly connected peer
+        socket.emit('media-state-change', {
+          roomId: cleanRoom,
+          videoOn: Boolean(userStreamRef.current?.getVideoTracks()[0]?.enabled),
+          micOn: Boolean(userStreamRef.current?.getAudioTracks()[0]?.enabled)
+        });
       });
 
       socket.on('user-joined', payload => {
@@ -1280,6 +1340,12 @@ function ActiveRoomPage({
         const peer = addPeer(payload.signal, payload.callerID, activeMedia);
         peersRef.current.push({ peerID: payload.callerID, peer });
         setPeers(prev => [...prev.filter(p => p.peerID !== payload.callerID), { peerID: payload.callerID, peer }]);
+        // Immediately sync our current media state with the newly joined peer
+        socket.emit('media-state-change', {
+          roomId: cleanRoom,
+          videoOn: Boolean(userStreamRef.current?.getVideoTracks()[0]?.enabled),
+          micOn: Boolean(userStreamRef.current?.getAudioTracks()[0]?.enabled)
+        });
       });
 
       socket.on('receiving-returned-signal', payload => {
@@ -1581,10 +1647,12 @@ function ActiveRoomPage({
     let analyser;
     let source;
     let animId;
+    let clonedLocalTrack = null;
 
     try {
+      const rawTrack = userStream.getAudioTracks()[0];
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (AudioCtx) {
+      if (AudioCtx && rawTrack) {
         audioCtx = new AudioCtx();
         if (audioCtx.state === 'suspended') {
           audioCtx.resume().catch(() => {});
@@ -1592,7 +1660,11 @@ function ActiveRoomPage({
         analyser = audioCtx.createAnalyser();
         analyser.fftSize = 128;
         analyser.smoothingTimeConstant = 0.4;
-        source = audioCtx.createMediaStreamSource(userStream);
+
+        // Clone the local track so createMediaStreamSource NEVER steals/intercepts the track from WebRTC peer connection!
+        clonedLocalTrack = rawTrack.clone();
+        const meterStream = new MediaStream([clonedLocalTrack]);
+        source = audioCtx.createMediaStreamSource(meterStream);
         source.connect(analyser);
 
         const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -1614,6 +1686,9 @@ function ActiveRoomPage({
 
     return () => {
       if (animId) cancelAnimationFrame(animId);
+      if (clonedLocalTrack) {
+        try { clonedLocalTrack.stop(); } catch(e) {}
+      }
       if (audioCtx && audioCtx.state !== 'closed') audioCtx.close();
     };
   }, [userStream, micOn]);
@@ -2274,88 +2349,60 @@ function ActiveRoomPage({
     const nextMic = !micOn;
 
     if (nextMic) {
-      // User is enabling mic
-      let track = userStreamRef.current?.getAudioTracks()[0];
-      const needsFreshTrack = !track || track.readyState !== 'live' || track.label?.includes('AudioDestination') || track.label === '';
-
-      if (needsFreshTrack) {
+      // User is turning mic ON: Always ensure real live hardware microphone track!
+      try {
+        let audioStream;
         try {
-          let audioStream;
-          try {
-            audioStream = await navigator.mediaDevices.getUserMedia({
-              audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          audioStream = await navigator.mediaDevices.getUserMedia({
+            audio: selectedMicId && selectedMicId !== 'default' && selectedMicId !== 'system'
+              ? { deviceId: { exact: selectedMicId }, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+              : { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+          });
+        } catch (e) {
+          audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        }
+
+        const newAudioTrack = audioStream?.getAudioTracks()[0];
+        if (newAudioTrack) {
+          newAudioTrack.enabled = true;
+          if (userStreamRef.current) {
+            userStreamRef.current.getAudioTracks().forEach(t => {
+              try { t.stop(); } catch (e) {}
+              userStreamRef.current.removeTrack(t);
             });
-          } catch (e) {
-            audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            userStreamRef.current.addTrack(newAudioTrack);
           }
 
-          const newAudioTrack = audioStream?.getAudioTracks()[0];
-          if (newAudioTrack) {
-            newAudioTrack.enabled = true;
-            if (userStreamRef.current) {
-              userStreamRef.current.getAudioTracks().forEach(t => {
-                try { t.stop(); } catch (e) {}
-                userStreamRef.current.removeTrack(t);
-              });
-              userStreamRef.current.addTrack(newAudioTrack);
-            }
-
-            // Dynamically replace audio track on all connected peers
-            peersRef.current.forEach(p => {
-              try {
-                const pc = p.peer?._pc;
-                if (pc) {
-                  const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'audio') || s.kind === 'audio');
-                  if (sender) {
-                    sender.replaceTrack(newAudioTrack);
-                  } else if (p.peer?.addTrack) {
-                    p.peer.addTrack(newAudioTrack, userStreamRef.current);
-                  }
+          // Force replaceTrack on all peer connections so real audio packets flow immediately
+          peersRef.current.forEach(p => {
+            try {
+              const pc = p.peer?._pc;
+              if (pc) {
+                const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'audio') || s.kind === 'audio');
+                if (sender) {
+                  sender.replaceTrack(newAudioTrack);
+                } else if (p.peer?.addTrack) {
+                  p.peer.addTrack(newAudioTrack, userStreamRef.current);
                 }
-              } catch (e) {
-                console.warn('Error replacing audio track on peer:', e);
               }
-            });
+            } catch (e) {
+              console.warn('Error replacing audio track on peer:', e);
+            }
+          });
 
-            setUserStream(new MediaStream(userStreamRef.current.getTracks()));
-            setMicPermissionBlocked(false);
-            setMicOn(true);
-            socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn, micOn: true });
-            showToast('🎤 Microphone is live!');
-            return;
-          }
-        } catch (err) {
-          console.warn('Microphone permission or hardware error:', err);
-          setMicPermissionBlocked(true);
-          showToast('⚠️ Microphone permission required. Please allow mic.');
+          setUserStream(new MediaStream(userStreamRef.current.getTracks()));
+          setMicPermissionBlocked(false);
+          setMicOn(true);
+          socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn, micOn: true });
+          showToast('🎤 Microphone is live!');
           return;
         }
+      } catch (err) {
+        console.warn('Microphone permission or hardware error:', err);
+        setMicPermissionBlocked(true);
+        showToast('⚠️ Microphone permission required. Please allow mic in browser settings.');
+        return;
       }
-
-      // Existing hardware track is live
-      if (track) {
-        track.enabled = true;
-        peersRef.current.forEach(p => {
-          try {
-            const pc = p.peer?._pc;
-            if (pc) {
-              const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'audio') || s.kind === 'audio');
-              if (sender) {
-                if (sender.track !== track) {
-                  sender.replaceTrack(track);
-                }
-              } else if (p.peer?.addTrack) {
-                p.peer.addTrack(track, userStreamRef.current);
-              }
-            }
-          } catch (e) {}
-        });
-        if (userStreamRef.current) {
-          setUserStream(new MediaStream(userStreamRef.current.getTracks()));
-        }
-      }
-      setMicOn(true);
-      socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn, micOn: true });
     } else {
       // User turns mic OFF
       const track = userStreamRef.current?.getAudioTracks()[0];
@@ -2364,70 +2411,79 @@ function ActiveRoomPage({
       }
       setMicOn(false);
       socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn, micOn: false });
+      showToast('🔇 Microphone muted');
     }
   };
 
   const toggleVideo = async () => {
-    let track = userStreamRef.current?.getVideoTracks()[0];
     const nextVideo = !videoOn;
 
     if (nextVideo) {
+      let newTrack = null;
       try {
-        const camStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        const newTrack = camStream.getVideoTracks()[0];
-        if (newTrack) {
-          if (userStreamRef.current) {
-            userStreamRef.current.getVideoTracks().forEach(t => {
-              try { t.stop(); } catch (e) {}
-              userStreamRef.current.removeTrack(t);
-            });
-            userStreamRef.current.addTrack(newTrack);
-          }
-          cameraTrackRef.current = newTrack;
-          peersRef.current.forEach(p => {
-            try {
-              const pc = p.peer?._pc;
-              if (pc) {
-                const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'video') || s.kind === 'video');
-                if (sender) {
-                  sender.replaceTrack(newTrack);
-                } else if (p.peer?.addTrack) {
-                  p.peer.addTrack(newTrack, userStreamRef.current);
-                }
-              }
-            } catch (e) {
-              console.warn('Error replacing video track on peer:', e);
-            }
-          });
-          setUserStream(new MediaStream(userStreamRef.current.getTracks()));
-          setVideoOn(true);
-          socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn: true, micOn });
-          showToast('📹 Camera connected!');
-          return;
-        }
+        const camStream = await navigator.mediaDevices.getUserMedia({
+          video: selectedCameraId && selectedCameraId !== 'default' && selectedCameraId !== 'system-cam'
+            ? { deviceId: { exact: selectedCameraId } }
+            : true
+        });
+        newTrack = camStream?.getVideoTracks()[0];
       } catch (err) {
-        console.warn('Physical camera unavailable:', err);
+        console.warn('Physical camera unavailable, seamlessly injecting synthetic canvas stream fallback:', err);
       }
-    }
 
-    if (track) {
-      track.enabled = nextVideo;
-      peersRef.current.forEach(p => {
+      // If physical webcam is unavailable or in use by another tab/app, generate animated fallback so screen is NEVER black!
+      if (!newTrack) {
         try {
-          const pc = p.peer?._pc;
-          if (pc) {
-            const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'video') || s.kind === 'video');
-            if (sender && sender.track !== track) {
-              sender.replaceTrack(track);
-            } else if (!sender && p.peer?.addTrack) {
-              p.peer.addTrack(track, userStreamRef.current);
-            }
+          const fallback = createFallbackStream(user?.name, isInstructor);
+          if (fallback) {
+            newTrack = fallback.getVideoTracks()[0];
           }
-        } catch (e) {}
-      });
+        } catch (e) {
+          console.warn('Fallback stream error:', e);
+        }
+      }
+
+      if (newTrack) {
+        newTrack.enabled = true;
+        if (userStreamRef.current) {
+          userStreamRef.current.getVideoTracks().forEach(t => {
+            try { t.stop(); } catch (e) {}
+            userStreamRef.current.removeTrack(t);
+          });
+          userStreamRef.current.addTrack(newTrack);
+        }
+        cameraTrackRef.current = newTrack;
+        peersRef.current.forEach(p => {
+          try {
+            const pc = p.peer?._pc;
+            if (pc) {
+              const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'video') || s.kind === 'video');
+              if (sender) {
+                sender.replaceTrack(newTrack);
+              } else if (p.peer?.addTrack) {
+                p.peer.addTrack(newTrack, userStreamRef.current);
+              }
+            }
+          } catch (e) {
+            console.warn('Error replacing video track on peer:', e);
+          }
+        });
+        setUserStream(new MediaStream(userStreamRef.current.getTracks()));
+        setVideoOn(true);
+        socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn: true, micOn });
+        showToast(newTrack.label?.includes('canvas') ? '🎨 Virtual camera stream active' : '📹 Camera connected!');
+        return;
+      }
+    } else {
+      // User turns video OFF
+      const track = userStreamRef.current?.getVideoTracks()[0];
+      if (track) {
+        track.enabled = false;
+      }
+      setVideoOn(false);
+      socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn: false, micOn });
+      showToast('🚫 Camera turned off');
     }
-    setVideoOn(nextVideo);
-    socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn: nextVideo, micOn });
   };
 
   // ─── Live Chat, Doubts & File Sharing Handlers ───
