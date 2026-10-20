@@ -14,8 +14,6 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [peerVolume, setPeerVolume] = useState(100);
 
-  if (!peerInfo) return null;
-
   const isVideoOn = mediaState?.videoOn !== false;
   const isMicOn = mediaState?.micOn !== false;
   const isInstructorPeer = peerInfo?.userRole === 'instructor';
@@ -23,6 +21,7 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
 
   const audioCtxRef = useRef(null);
   const sourceNodeRef = useRef(null);
+  const clonedTrackRef = useRef(null);
 
   useEffect(() => {
     let animId;
@@ -30,13 +29,17 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
     const setupStream = (stream) => {
       if (!stream) return;
 
-      if (videoRef.current && videoRef.current.srcObject !== stream) {
-        videoRef.current.srcObject = stream;
+      if (videoRef.current) {
+        if (videoRef.current.srcObject !== stream) {
+          videoRef.current.srcObject = stream;
+        }
         videoRef.current.play().catch(err => console.warn('Remote video play notice:', err));
       }
 
-      if (audioRef.current && audioRef.current.srcObject !== stream) {
-        audioRef.current.srcObject = stream;
+      if (audioRef.current) {
+        if (audioRef.current.srcObject !== stream) {
+          audioRef.current.srcObject = stream;
+        }
         audioRef.current.volume = Math.max(0, Math.min(1, peerVolume / 100));
         audioRef.current.muted = false;
         
@@ -58,10 +61,11 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
         }
       }
 
-      // Live voice detection (Web Audio Analyser for speaking indicator)
+      // Live voice detection (Web Audio Analyser): CLONE the audio track so AudioContext NEVER steals native stream
       try {
+        const rawAudioTrack = stream.getAudioTracks()[0];
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (AudioCtx && stream.getAudioTracks().length > 0) {
+        if (AudioCtx && rawAudioTrack) {
           if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
             audioCtxRef.current = new AudioCtx();
           }
@@ -72,16 +76,26 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
 
           if (sourceNodeRef.current) {
             try { sourceNodeRef.current.disconnect(); } catch (e) {}
+            sourceNodeRef.current = null;
+          }
+          if (clonedTrackRef.current) {
+            try { clonedTrackRef.current.stop(); } catch (e) {}
+            clonedTrackRef.current = null;
           }
           if (animId) {
             cancelAnimationFrame(animId);
           }
 
+          // CLONE the audio track into an isolated MediaStream specifically for the analyser!
+          const clonedTrack = rawAudioTrack.clone();
+          clonedTrackRef.current = clonedTrack;
+          const analyserStream = new MediaStream([clonedTrack]);
+
           const analyser = ctx.createAnalyser();
           analyser.fftSize = 128;
           analyser.smoothingTimeConstant = 0.3;
 
-          const source = ctx.createMediaStreamSource(stream);
+          const source = ctx.createMediaStreamSource(analyserStream);
           sourceNodeRef.current = source;
           source.connect(analyser);
 
@@ -108,8 +122,9 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
       if (stream) setupStream(stream);
     });
 
-    if (peer._remoteStreams?.[0]) {
-      setupStream(peer._remoteStreams[0]);
+    const existingStream = peer._remoteStreams?.[0] || peer.streams?.[0];
+    if (existingStream) {
+      setupStream(existingStream);
     }
 
     return () => {
@@ -119,6 +134,10 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
       if (sourceNodeRef.current) {
         try { sourceNodeRef.current.disconnect(); } catch (e) {}
         sourceNodeRef.current = null;
+      }
+      if (clonedTrackRef.current) {
+        try { clonedTrackRef.current.stop(); } catch (e) {}
+        clonedTrackRef.current = null;
       }
       if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
         try { audioCtxRef.current.close(); } catch(e) {}
@@ -186,23 +205,26 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
     };
   }, [peerVolume]);
 
+  // Ensure video element plays when video is toggled on
+  useEffect(() => {
+    if (videoRef.current && isVideoOn && videoRef.current.srcObject) {
+      videoRef.current.play().catch(() => {});
+    }
+  }, [isVideoOn]);
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }} className={isSpeaking ? 'peer-speaking-highlight' : ''}>
-      {/* ── Video Element (kept in DOM with opacity so mobile doesn't suspend media tracks) ── */}
+      {/* ── Video Element ── */}
       <video
         autoPlay
         playsInline
-        muted
         ref={videoRef}
         className="video-element"
         style={{
           width: '100%',
           height: '100%',
           objectFit: 'cover',
-          opacity: isVideoOn ? 1 : 0,
-          position: isVideoOn ? 'relative' : 'absolute',
-          inset: 0,
-          pointerEvents: isVideoOn ? 'auto' : 'none'
+          display: isVideoOn ? 'block' : 'none'
         }}
       />
       <audio autoPlay playsInline ref={audioRef} />
@@ -578,12 +600,14 @@ async function acquireMediaStream(userName, isInstructor) {
     } catch (e) {}
   }
 
-  // 3. Attach fallback canvas video track so WebRTC simple-peer video channel is established
+  // 3. Attach fallback canvas video track ONLY if no real video track exists
   try {
-    const canvasStream = createFallbackStream(userName, isInstructor);
-    if (canvasStream) {
-      const vTrack = canvasStream.getVideoTracks()[0];
-      if (vTrack) stream.addTrack(vTrack);
+    if (!hasRealVideo && stream.getVideoTracks().length === 0) {
+      const canvasStream = createFallbackStream(userName, isInstructor);
+      if (canvasStream) {
+        const vTrack = canvasStream.getVideoTracks()[0];
+        if (vTrack) stream.addTrack(vTrack);
+      }
     }
   } catch (e) {
     console.warn('Synthetic canvas error:', e);
@@ -2362,9 +2386,18 @@ function ActiveRoomPage({
           cameraTrackRef.current = newTrack;
           peersRef.current.forEach(p => {
             try {
-              const sender = p.peer?._pc?.getSenders()?.find(s => s.track && s.track.kind === 'video');
-              if (sender) sender.replaceTrack(newTrack);
-            } catch (e) {}
+              const pc = p.peer?._pc;
+              if (pc) {
+                const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'video') || s.kind === 'video');
+                if (sender) {
+                  sender.replaceTrack(newTrack);
+                } else if (p.peer?.addTrack) {
+                  p.peer.addTrack(newTrack, userStreamRef.current);
+                }
+              }
+            } catch (e) {
+              console.warn('Error replacing video track on peer:', e);
+            }
           });
           setUserStream(new MediaStream(userStreamRef.current.getTracks()));
           setVideoOn(true);
@@ -2379,6 +2412,19 @@ function ActiveRoomPage({
 
     if (track) {
       track.enabled = nextVideo;
+      peersRef.current.forEach(p => {
+        try {
+          const pc = p.peer?._pc;
+          if (pc) {
+            const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'video') || s.kind === 'video');
+            if (sender && sender.track !== track) {
+              sender.replaceTrack(track);
+            } else if (!sender && p.peer?.addTrack) {
+              p.peer.addTrack(track, userStreamRef.current);
+            }
+          }
+        } catch (e) {}
+      });
     }
     setVideoOn(nextVideo);
     socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn: nextVideo, micOn });
@@ -3175,16 +3221,18 @@ function ActiveRoomPage({
               user={user}
               onOpenSettings={onOpenSettings}
             />
-            {peers
-              .filter(peerObj => participants.some(p => p.socketId === peerObj.peerID))
-              .map(peerObj => {
-                const pInfo = participants.find(p => p.socketId === peerObj.peerID);
-                const mState = peerMediaStates[peerObj.peerID];
-                return (
-                  <div className="video-card" key={peerObj.peerID}>
-                    <RemoteVideo peer={peerObj.peer} peerInfo={pInfo} mediaState={mState} />
-                  </div>
-                );
+            {peers.map(peerObj => {
+              const pInfo = participants.find(p => p.socketId === peerObj.peerID) || {
+                socketId: peerObj.peerID,
+                userName: 'Peer',
+                userRole: 'student'
+              };
+              const mState = peerMediaStates[peerObj.peerID];
+              return (
+                <div className="video-card" key={peerObj.peerID}>
+                  <RemoteVideo peer={peerObj.peer} peerInfo={pInfo} mediaState={mState} />
+                </div>
+              );
             })}
           </div>
 

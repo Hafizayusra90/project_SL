@@ -153,9 +153,16 @@ const syncHandler = (io, socket) => {
     socket.emit('room-lock-status', { isLocked: lockedRooms.has(roomId) });
 
     // Send existing media states of participants
-    if (roomMediaStates.has(roomId)) {
+    let foundStates = null;
+    for (const v of variants) {
+      if (roomMediaStates.has(v)) {
+        foundStates = roomMediaStates.get(v);
+        break;
+      }
+    }
+    if (foundStates) {
       const currentStates = {};
-      for (const [sId, st] of roomMediaStates.get(roomId).entries()) {
+      for (const [sId, st] of foundStates.entries()) {
         currentStates[sId] = st;
       }
       socket.emit('room-media-states-sync', currentStates);
@@ -223,21 +230,26 @@ const syncHandler = (io, socket) => {
 
   // ── Participant Media State Update Broadcast ──
   socket.on('media-state-change', ({ roomId: rawRoomId, videoOn, micOn }) => {
-    const roomId = sanitizeRoomId(rawRoomId || socket.roomId);
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId || socket.roomId);
+    const roomId = canonicalRoomId || sanitizeRoomId(rawRoomId || socket.roomId);
+    const variants = getRoomVariants(rawRoomId || socket.roomId);
     if (roomId) {
-      if (!roomMediaStates.has(roomId)) {
-        roomMediaStates.set(roomId, new Map());
-      }
-      roomMediaStates.get(roomId).set(socket.id, {
-        videoOn: videoOn !== false,
-        micOn: micOn !== false
+      variants.forEach(v => {
+        if (!roomMediaStates.has(v)) {
+          roomMediaStates.set(v, new Map());
+        }
+        roomMediaStates.get(v).set(socket.id, {
+          videoOn: videoOn !== false,
+          micOn: micOn !== false
+        });
       });
     }
-    socket.to(roomId).emit('peer-media-state-change', {
+    const payload = {
       socketId: socket.id,
       videoOn: videoOn !== false,
       micOn: micOn !== false
-    });
+    };
+    variants.forEach(v => socket.to(v).emit('peer-media-state-change', payload));
   });
 
   // ── Query Room Info (Host & Title) ──
