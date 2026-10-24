@@ -20,6 +20,7 @@ const lectureMaterialSchema = new mongoose.Schema({
 const roomSchema = new mongoose.Schema({
   roomId: { type: String, required: true, unique: true, index: true },
   title: { type: String, default: 'Live Classroom' },
+  passcode: { type: String, default: 'JxkYHk' },
   instructorName: { type: String, default: 'Instructor' },
   instructorEmail: { type: String },
   instructorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

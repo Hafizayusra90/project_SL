@@ -1333,6 +1333,61 @@
   box-shadow: 0 0 10px rgba(2, 132, 199, 0.4);
 }
 
+.chat-lock-toggle-btn {
+  background: rgba(14, 165, 233, 0.15);
+  border: 1px solid rgba(14, 165, 233, 0.4);
+  color: #38bdf8;
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.chat-lock-toggle-btn:hover {
+  background: rgba(14, 165, 233, 0.3);
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.35);
+}
+.chat-lock-toggle-btn.locked {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.6);
+  color: #f87171;
+}
+.chat-lock-toggle-btn.locked:hover {
+  background: rgba(239, 68, 68, 0.35);
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+}
+
+.chat-lock-status-banner {
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  margin-bottom: 0.5rem;
+  display: flex;
+  align-items: center;
+  line-height: 1.4;
+}
+.chat-lock-status-banner.student-mode {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+.chat-lock-status-banner.instructor-mode {
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  color: #fcd34d;
+}
+
+.input-chat-locked {
+  background: rgba(239, 68, 68, 0.08) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+  color: #94a3b8 !important;
+  cursor: not-allowed !important;
+}
+
 /* Pinned Doubts Accordion */
 .pinned-doubts-card {
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(6, 24, 44, 0.75) 100%);
@@ -1716,7 +1771,7 @@
   -webkit-backdrop-filter: blur(20px);
   padding: 0 1.25rem;
   box-shadow: 0 -6px 25px rgba(0, 0, 0, 0.45);
-  z-index: 500;
+  z-index: 10000;
   overflow: visible !important;
 }
 
@@ -4384,19 +4439,19 @@
 
 .zoom-meeting-info-flyout.footer-flyout {
   position: absolute !important;
-  bottom: calc(100% + 12px) !important;
+  bottom: calc(100% + 14px) !important;
   top: auto !important;
   right: 0 !important;
   left: auto !important;
-  width: 295px;
+  width: 300px;
   max-height: 75vh;
   overflow-y: auto;
-  background: #1e2430;
-  border: 1.5px solid rgba(56, 189, 248, 0.35);
-  border-radius: 10px;
-  box-shadow: 0 -12px 35px rgba(0, 0, 0, 0.8), 0 0 15px rgba(0, 229, 255, 0.15);
-  z-index: 999999 !important;
-  padding: 14px 16px;
+  background: #151b26 !important;
+  border: 1.5px solid rgba(56, 189, 248, 0.4);
+  border-radius: 12px;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.9), 0 0 20px rgba(56, 189, 248, 0.25) !important;
+  z-index: 9999999 !important;
+  padding: 16px 18px 24px 18px !important;
   font-size: 0.8rem;
   display: block !important;
   visibility: visible !important;
@@ -4449,6 +4504,57 @@
 .zoom-meeting-info-flyout.footer-flyout .zoom-info-copy-btn:hover {
   background: #0284c7;
   color: #fff;
+}
+
+/* Light Mode Contrast Support for Meeting Info Flyout */
+[data-theme="light"] .zoom-meeting-info-flyout.footer-flyout,
+.theme-light .zoom-meeting-info-flyout.footer-flyout {
+  background: #ffffff !important;
+  border: 1.5px solid rgba(8, 145, 178, 0.35) !important;
+  box-shadow: 0 16px 45px rgba(0, 0, 0, 0.18), 0 0 20px rgba(8, 145, 178, 0.15) !important;
+  color: #0f172a !important;
+}
+
+[data-theme="light"] .zoom-meeting-info-flyout.footer-flyout .zoom-info-meeting-title,
+.theme-light .zoom-meeting-info-flyout.footer-flyout .zoom-info-meeting-title {
+  color: #0f172a !important;
+  font-weight: 800 !important;
+}
+
+[data-theme="light"] .zoom-meeting-info-flyout.footer-flyout .zoom-info-field-title,
+.theme-light .zoom-meeting-info-flyout.footer-flyout .zoom-info-field-title {
+  color: #475569 !important;
+  font-weight: 600 !important;
+}
+
+[data-theme="light"] .zoom-meeting-info-flyout.footer-flyout .zoom-info-field-val,
+.theme-light .zoom-meeting-info-flyout.footer-flyout .zoom-info-field-val {
+  color: #0f172a !important;
+  font-weight: 700 !important;
+}
+
+[data-theme="light"] .zoom-meeting-info-flyout.footer-flyout .zoom-info-copy-btn,
+.theme-light .zoom-meeting-info-flyout.footer-flyout .zoom-info-copy-btn {
+  background: rgba(8, 145, 178, 0.12) !important;
+  border: 1px solid rgba(8, 145, 178, 0.35) !important;
+  color: #0891b2 !important;
+}
+
+[data-theme="light"] .zoom-meeting-info-flyout.footer-flyout .zoom-info-copy-btn:hover,
+.theme-light .zoom-meeting-info-flyout.footer-flyout .zoom-info-copy-btn:hover {
+  background: #0891b2 !important;
+  color: #ffffff !important;
+}
+
+[data-theme="light"] .zoom-meeting-info-flyout.footer-flyout .zoom-flyout-icon-btn,
+.theme-light .zoom-meeting-info-flyout.footer-flyout .zoom-flyout-icon-btn {
+  color: #64748b !important;
+}
+
+[data-theme="light"] .zoom-meeting-info-flyout.footer-flyout .zoom-flyout-icon-btn:hover,
+.theme-light .zoom-meeting-info-flyout.footer-flyout .zoom-flyout-icon-btn:hover {
+  background: rgba(0, 0, 0, 0.06) !important;
+  color: #0f172a !important;
 }
 
 

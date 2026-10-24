@@ -5,7 +5,6 @@ import DashboardPage from './DashboardPage';
 import ActiveRoomPage from './ActiveRoomPage';
 import FeaturesPage from './FeaturesPage';
 import AboutPage from './AboutPage';
-import DemoPage from './DemoPage';
 import SummaryPage from './SummaryPage';
 import ProfilePage from './ProfilePage';
 import AnalyticsPage from './AnalyticsPage';
@@ -186,14 +185,14 @@ function App() {
               localStorage.setItem('synclearn_meeting_topic', cleanTopic);
             } catch(e) {}
           }
-          setIsStudentLinkJoin(true);
+          setIsStudentLinkJoin(user?.role !== 'instructor');
           setIsPreJoinOpen(true);
         }
       }
     } catch (err) {
       console.error('URL invite parse error:', err);
     }
-  }, []);
+  }, [user?.role]);
 
   const handleNavigate = (page) => setCurrentPage(page);
 
@@ -336,10 +335,6 @@ function App() {
           <AboutPage onNavigate={handleNavigate} theme={theme} onToggleTheme={toggleTheme} />
         )}
 
-        {currentPage === 'demo' && (
-          <DemoPage onNavigate={handleNavigate} theme={theme} onToggleTheme={toggleTheme} />
-        )}
-
         {currentPage === 'summary' && (
           <SummaryPage
             roomId={activeRoomId}
@@ -374,8 +369,8 @@ function App() {
           onOpenSettings={handleOpenSettings}
           user={user}
           roomId={preJoinRoomId}
-          isInstructor={user?.role === 'instructor' && !isStudentLinkJoin}
-          isStudentJoinLink={isStudentLinkJoin}
+          isInstructor={user?.role === 'instructor'}
+          isStudentJoinLink={user?.role !== 'instructor' && isStudentLinkJoin}
           hostName={roomHostName}
         />
 

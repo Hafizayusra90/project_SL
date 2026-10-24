@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import syncLearnLogo from './assets/logo.png';
+import { socket } from './socket';
 import './PreJoinModal.css';
 
 function PreJoinModal({
@@ -20,6 +21,10 @@ function PreJoinModal({
     return user?.name || '';
   });
   const [nameError, setNameError] = useState('');
+  const [passcode, setPasscode] = useState('');
+  const [passcodeError, setPasscodeError] = useState('');
+  const [admissionStatus, setAdmissionStatus] = useState('idle'); // 'idle' | 'pending' | 'denied'
+  const [admissionError, setAdmissionError] = useState('');
 
   const [resolvedHostName, setResolvedHostName] = useState(() => {
     if (isInstructor) return user?.name || '';
@@ -207,6 +212,46 @@ function PreJoinModal({
     localStorage.setItem('synclearn_always_show_preview', checked ? 'true' : 'false');
   };
 
+    // Listen for instructor admission response
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleAdmissionGranted = () => {
+      setAdmissionStatus('idle');
+      const activeStream = streamRef.current;
+      streamRef.current = null;
+      if (onJoin) {
+        onJoin({
+          name: realName.trim() || 'Student',
+          micOn,
+          videoOn,
+          blurBackground,
+          initialStream: activeStream
+        });
+      }
+    };
+
+    const handleAdmissionDenied = (data) => {
+      setAdmissionStatus('denied');
+      setAdmissionError(data?.message || 'The instructor did not allow you to enter this class.');
+    };
+
+    const handleRoomLocked = (data) => {
+      setAdmissionStatus('denied');
+      setAdmissionError(data?.message || 'This room has been locked by the instructor.');
+    };
+
+    socket.on('admission-granted', handleAdmissionGranted);
+    socket.on('admission-denied', handleAdmissionDenied);
+    socket.on('room-locked-error', handleRoomLocked);
+
+    return () => {
+      socket.off('admission-granted', handleAdmissionGranted);
+      socket.off('admission-denied', handleAdmissionDenied);
+      socket.off('room-locked-error', handleRoomLocked);
+    };
+  }, [isOpen, onJoin, realName, micOn, videoOn, blurBackground]);
+
   const handleSubmit = (e) => {
     if (e) e.preventDefault();
 
@@ -224,13 +269,42 @@ function PreJoinModal({
         if (!window.__synclearnGlobalAudioCtx || window.__synclearnGlobalAudioCtx.state === 'closed') {
           window.__synclearnGlobalAudioCtx = new AudioCtx();
         }
-        if (window.__synclearnGlobalAudioCtx.state === 'suspended') {
-          window.__synclearnGlobalAudioCtx.resume().catch(() => {});
+        const gCtx = window.__synclearnGlobalAudioCtx;
+        if (gCtx.state === 'suspended') {
+          gCtx.resume().catch(() => {});
         }
+        // Play 1 sample of silence to unlock mobile audio hardware on iOS Safari & Android
+        try {
+          const silentBuf = gCtx.createBuffer(1, 1, 22050);
+          const bSource = gCtx.createBufferSource();
+          bSource.buffer = silentBuf;
+          bSource.connect(gCtx.destination);
+          bSource.start(0);
+        } catch(be) {}
       }
     } catch (e) {}
 
-    // Pass active preview stream directly to ActiveRoomPage so mobile hardware does not lock up
+    // If student, verify class passcode token for instant authorized access
+    if (!isInstructor) {
+      if (!passcode.trim()) {
+        setPasscodeError('Please enter the class passcode to join.');
+        return;
+      }
+      if (!socket.connected) {
+        socket.connect();
+      }
+      setAdmissionStatus('pending');
+      const cleanR = (roomId || '849-291-034').trim();
+      socket.emit('verify-room-passcode', {
+        roomId: cleanR,
+        passcode: passcode.trim(),
+        userName: trimmedName,
+        userRole: 'student'
+      });
+      return;
+    }
+
+    // Instructor proceeds immediately
     const activeStream = streamRef.current;
     streamRef.current = null;
 
@@ -303,10 +377,91 @@ function PreJoinModal({
         </div>
 
         {/* ── Body ── */}
-        <div className="prejoin-body">
+        {admissionStatus === 'pending' ? (
+          <div className="prejoin-waiting-room" style={{ padding: '3.5rem 2rem', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ position: 'relative', width: '90px', height: '90px', marginBottom: '1.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '4px solid #06b6d4', borderTopColor: 'transparent', animation: 'spin 1.2s linear infinite' }} />
+              <div style={{ fontSize: '2.6rem' }}>🔐</div>
+            </div>
+            <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#0284c7', marginBottom: '0.6rem' }}>
+              Verifying Class Passcode...
+            </h2>
+            <p style={{ fontSize: '0.94rem', color: '#64748b', maxWidth: '440px', lineHeight: 1.6, marginBottom: '1.4rem' }}>
+              Validating your secure enrollment token for <strong>{resolvedTopic}</strong> with host <strong>{meetingHostName}</strong>. You will be connected instantly.
+            </p>
+            <div style={{ background: 'rgba(6, 182, 212, 0.08)', border: '1px solid rgba(6, 182, 212, 0.25)', borderRadius: '10px', padding: '10px 18px', marginBottom: '2rem', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.85rem', color: '#0e7490', fontWeight: 600 }}>
+                👤 Joining as: <strong>{realName}</strong>
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAdmissionStatus('idle')}
+              style={{
+                background: 'transparent',
+                border: '1.5px solid #cbd5e1',
+                borderRadius: '8px',
+                padding: '9px 22px',
+                color: '#64748b',
+                fontWeight: 600,
+                fontSize: '0.88rem',
+                cursor: 'pointer'
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : admissionStatus === 'denied' ? (
+          <div className="prejoin-waiting-room" style={{ padding: '3.5rem 2rem', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            <div style={{ width: '80px', height: '80px', borderRadius: '50%', background: 'rgba(239, 68, 68, 0.12)', border: '2px solid #ef4444', marginBottom: '1.6rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.4rem' }}>
+              ❌
+            </div>
+            <h2 style={{ fontSize: '1.45rem', fontWeight: 800, color: '#ef4444', marginBottom: '0.6rem' }}>
+              Admission Denied
+            </h2>
+            <p style={{ fontSize: '0.94rem', color: '#64748b', maxWidth: '440px', lineHeight: 1.6, marginBottom: '2rem' }}>
+              {admissionError || 'The instructor did not allow you to enter this class.'}
+            </p>
+            <div style={{ display: 'flex', gap: '14px' }}>
+              <button
+                type="button"
+                onClick={() => setAdmissionStatus('idle')}
+                style={{
+                  background: '#0284c7',
+                  border: 'none',
+                  borderRadius: '8px',
+                  padding: '10px 22px',
+                  color: '#fff',
+                  fontWeight: 700,
+                  fontSize: '0.88rem',
+                  cursor: 'pointer'
+                }}
+              >
+                Try Again
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                style={{
+                  background: 'transparent',
+                  border: '1.5px solid #cbd5e1',
+                  borderRadius: '8px',
+                  padding: '10px 22px',
+                  color: '#64748b',
+                  fontWeight: 600,
+                  fontSize: '0.88rem',
+                  cursor: 'pointer'
+                }}
+              >
+                Return Home
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="prejoin-body">
           {/* Video Preview Viewport */}
           <div className="prejoin-preview-viewport">
-            {videoOn ? (
+            {videoOn && streamRef.current?.getVideoTracks?.().some(t => t.readyState === 'live') ? (
               <video
                 ref={videoRef}
                 autoPlay
@@ -481,6 +636,34 @@ function PreJoinModal({
             </div>
           )}
 
+          {/* ── Student Passcode / Access Token Input Field (Secure Access Control) ── */}
+          {!isInstructor && (
+            <div className="prejoin-name-section" style={{ marginTop: 12 }}>
+              <label className="prejoin-name-label">
+                🔑 Class Passcode / Access Token <span style={{ color: '#ef4444' }}>*</span>
+              </label>
+              <input
+                type="text"
+                className="prejoin-name-input"
+                placeholder="Enter class passcode (e.g. JxkYHk) provided by teacher..."
+                value={passcode}
+                onChange={(e) => {
+                  setPasscode(e.target.value);
+                  if (passcodeError) setPasscodeError('');
+                }}
+              />
+              {passcodeError ? (
+                <span style={{ fontSize: '0.75rem', color: '#ef4444', fontWeight: 600 }}>
+                  ⚠️ {passcodeError}
+                </span>
+              ) : (
+                <span className="prejoin-name-hint">
+                  Secure enrollment token: Authorized students with valid token join automatically.
+                </span>
+              )}
+            </div>
+          )}
+
           {/* ── Bottom Controls Row (Matching Image 1) ── */}
           <div className="prejoin-footer-row">
             <label className="prejoin-checkbox-wrap">
@@ -502,6 +685,7 @@ function PreJoinModal({
             </button>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

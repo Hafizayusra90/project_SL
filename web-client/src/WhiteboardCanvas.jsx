@@ -14,6 +14,45 @@ const TOOLS = {
 
 const COLORS = ['#6366f1', '#a78bfa', '#38bdf8', '#4ade80', '#f59e0b', '#f87171', '#ffffff', '#000000'];
 
+// Urdu Phonetic Mapping for standard Latin/English keyboards
+const URDU_PHONETIC_MAP = {
+  'a': 'ا', 'A': 'آ',
+  'b': 'ب', 'B': 'ّ',
+  'p': 'پ', 'P': 'ُ',
+  't': 'ت', 'T': 'ٹ',
+  'c': 'چ', 'C': 'ث',
+  'j': 'ج', 'J': 'ض',
+  'h': 'ح', 'H': 'ھ',
+  'k': 'ک', 'K': 'خ',
+  'd': 'د', 'D': 'ڈ',
+  'r': 'ر', 'R': 'ڑ',
+  'z': 'ز', 'Z': 'ذ',
+  's': 'س', 'S': 'ص',
+  'x': 'ش', 'X': 'ژ',
+  'f': 'ف', 'F': 'ٖ',
+  'q': 'ق', 'Q': 'ْ',
+  'g': 'گ', 'G': 'غ',
+  'l': 'ل', 'L': 'ل',
+  'm': 'م', 'M': 'ً',
+  'n': 'ن', 'N': 'ں',
+  'v': 'ط', 'V': 'ظ',
+  'w': 'و', 'W': 'ؤ',
+  'e': 'ع', 'E': 'ء',
+  'y': 'ے', 'Y': 'ي',
+  'i': 'ی', 'I': 'ٰ',
+  'o': 'ہ', 'O': 'ۃ',
+  'u': 'ء', 'U': 'ئ',
+  '?': '؟', ',': '،', ';': '؛', '.': '۔'
+};
+
+// Character strip for on-screen touch and click input on mobile and desktop
+const URDU_QUICK_CHARS = [
+  'ا', 'آ', 'ب', 'پ', 'ت', 'ٹ', 'ث', 'ج', 'چ', 'ح', 'خ',
+  'د', 'ڈ', 'ذ', 'ر', 'ڑ', 'ز', 'ژ', 'س', 'ش', 'ص', 'ض',
+  'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ک', 'گ', 'ل', 'م', 'ن',
+  'ں', 'و', 'ہ', 'ھ', 'ء', 'ی', 'ے', '۔', '،', '؟'
+];
+
 function WhiteboardCanvas({ roomId, user, theme }) {
   const canvasRef     = useRef(null);
   const isDrawingRef  = useRef(false);
@@ -32,8 +71,12 @@ function WhiteboardCanvas({ roomId, user, theme }) {
   const [lineWidth, setLineWidth] = useState(3);
   const [isDrawingEnabled, setIsDrawingEnabled] = useState(false);
 
-  // Dual Mode (Typing Pad + Whiteboard Canvas)
+  // Student Drawing Permission & Stylus Support
+  const [allowStudentDraw, setAllowStudentDraw] = useState(false);
+
+  // Dual Mode (Typing Pad + Whiteboard Canvas) & Urdu Mode
   const [isDualMode, setIsDualMode] = useState(true);
+  const [isUrduMode, setIsUrduMode] = useState(false);
   const [activeMobileWbTab, setActiveMobileWbTab] = useState('canvas'); // 'canvas' | 'notes'
   const [isToolsMenuOpen, setIsToolsMenuOpen] = useState(false);
   const [typedNotes, setTypedNotes] = useState("Welcome students to today's live session!");
@@ -49,6 +92,41 @@ function WhiteboardCanvas({ roomId, user, theme }) {
       fontSize: typingFontSize,
       textColor: typingTextColor
     });
+  };
+
+  const handleToggleStudentDraw = () => {
+    if (!isInstructor) return;
+    const nextVal = !allowStudentDraw;
+    setAllowStudentDraw(nextVal);
+    socket.emit('toggle-whiteboard-student-draw', { roomId, allowed: nextVal });
+    showToast(nextVal ? '✏️ Student drawing enabled!' : '🔒 Student drawing locked');
+  };
+
+  const insertUrduCharacter = (char) => {
+    const el = textareaRef.current;
+    if (!el) {
+      handleTeacherNoteChange(typedNotes + char);
+      return;
+    }
+    const start = el.selectionStart ?? typedNotes.length;
+    const end = el.selectionEnd ?? typedNotes.length;
+    const updated = typedNotes.substring(0, start) + char + typedNotes.substring(end);
+    handleTeacherNoteChange(updated);
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(start + char.length, start + char.length);
+      }
+    }, 0);
+  };
+
+  const handleKeyDownUrdu = (e) => {
+    if (!isUrduMode) return;
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (e.key && e.key.length === 1 && URDU_PHONETIC_MAP[e.key]) {
+      e.preventDefault();
+      insertUrduCharacter(URDU_PHONETIC_MAP[e.key]);
+    }
   };
 
   // Laser Pointer State
@@ -194,26 +272,32 @@ function WhiteboardCanvas({ roomId, user, theme }) {
     showToast('📌 Line pinned in Typing Pad!');
   }, [typedNotes, handleTeacherNoteChange]);
 
-  // Formatted renderer for notes with highlight badges and pinned points
+  // Formatted renderer for notes with highlight badges, pinned points & Urdu support
   const renderFormattedNotes = (text) => {
     if (!text) return null;
     return text.split('\n').map((line, idx) => {
       const parts = line.split(/(==[^=]+==)/g);
       const isPinned = line.startsWith('📌');
       const isHeading = line.startsWith('#');
+      const isUrduLine = /[\u0600-\u06FF]/.test(line);
 
       return (
         <div
           key={idx}
+          dir={isUrduLine ? 'rtl' : 'ltr'}
           style={{
             minHeight: '1.4em',
             marginBottom: isHeading ? '0.4rem' : '0.15rem',
             padding: isPinned ? '3px 8px' : '0',
             background: isPinned ? 'rgba(56, 189, 248, 0.12)' : 'transparent',
-            borderLeft: isPinned ? '3px solid #38bdf8' : 'none',
+            borderLeft: !isUrduLine && isPinned ? '3px solid #38bdf8' : 'none',
+            borderRight: isUrduLine && isPinned ? '3px solid #38bdf8' : 'none',
             borderRadius: isPinned ? '4px' : '0',
             fontWeight: isHeading ? 700 : 'normal',
-            color: isHeading ? '#38bdf8' : 'inherit'
+            color: isHeading ? '#38bdf8' : 'inherit',
+            fontFamily: isUrduLine ? "'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', 'Segoe UI', Tahoma, sans-serif" : 'inherit',
+            lineHeight: isUrduLine ? 1.85 : 1.5,
+            textAlign: isUrduLine ? 'right' : 'left'
           }}
         >
           {parts.map((part, pIdx) => {
@@ -404,6 +488,10 @@ function WhiteboardCanvas({ roomId, user, theme }) {
     socket.on('whiteboard-laser', handleRemoteLaser);
     socket.on('whiteboard-typing-sync', handleTypingSync);
     socket.on('send-canvas-state', handleSendCanvasState);
+    const handleStudentDrawStatus = ({ allowed }) => {
+      setAllowStudentDraw(Boolean(allowed));
+    };
+    socket.on('whiteboard-student-draw-status', handleStudentDrawStatus);
 
     // If student, request current canvas state from instructor with retries
     let t1, t2;
@@ -428,6 +516,7 @@ function WhiteboardCanvas({ roomId, user, theme }) {
       socket.off('whiteboard-laser', handleRemoteLaser);
       socket.off('whiteboard-typing-sync', handleTypingSync);
       socket.off('send-canvas-state', handleSendCanvasState);
+      socket.off('whiteboard-student-draw-status', handleStudentDrawStatus);
       socket.off('connect', handleReconnect);
       if (t1) clearTimeout(t1);
       if (t2) clearTimeout(t2);
@@ -436,21 +525,34 @@ function WhiteboardCanvas({ roomId, user, theme }) {
   }, [restoreSnapshot, isInstructor, roomId]);
 
   const getPos = (e) => {
-    const rect = canvasRef.current.getBoundingClientRect();
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
     if (e.touches && e.touches.length > 0) {
       return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
     }
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
+  const getEffectiveLineWidth = (e, baseWidth, isEraser) => {
+    if (isEraser) return baseWidth * 4;
+    // Pressure sensitivity for digital stylus / pen (0.0 to 1.0)
+    if (e && e.pointerType === 'pen' && typeof e.pressure === 'number' && e.pressure > 0) {
+      return Math.max(1, Math.round(baseWidth * (0.4 + e.pressure * 1.2)));
+    }
+    return Number(baseWidth);
+  };
+
   const startDrawing = (e) => {
-    // 1. Students are strictly restricted (cannot draw anything on whiteboard)
-    if (!isInstructor) {
+    // Check permission: strictly Teacher or student if teacher explicitly enabled
+    const canDraw = isInstructor || allowStudentDraw;
+
+    if (!canDraw) {
+      showToast('🔒 Drawing locked by teacher.');
       return;
     }
 
-    // 2. Instructor cannot draw until they enable/unlock drawing tool
-    if (!isDrawingEnabled && tool !== TOOLS.LASER) {
+    if (isInstructor && !isDrawingEnabled && tool !== TOOLS.LASER) {
       showToast('🔒 Drawing locked. Click "✏️ Drawing Locked" above to enable pen!');
       return;
     }
@@ -484,8 +586,10 @@ function WhiteboardCanvas({ roomId, user, theme }) {
   };
 
   const draw = (e) => {
-    if (!isInstructor) return;
-    if (!isDrawingEnabled && tool !== TOOLS.LASER) return;
+    const isPen = e.pointerType === 'pen';
+    const canDraw = isInstructor || allowStudentDraw || isPen;
+    if (!canDraw) return;
+    if (isInstructor && !isDrawingEnabled && tool !== TOOLS.LASER && !isPen) return;
 
     const { x, y } = getPos(e);
 
@@ -506,9 +610,10 @@ function WhiteboardCanvas({ roomId, user, theme }) {
     const canvas = canvasRef.current;
 
     if (tool === TOOLS.PEN || tool === TOOLS.ERASER) {
+      const strokeW = getEffectiveLineWidth(e, lineWidth, tool === TOOLS.ERASER);
       ctx.globalCompositeOperation = tool === TOOLS.ERASER ? 'destination-out' : 'source-over';
       ctx.strokeStyle = color;
-      ctx.lineWidth   = tool === TOOLS.ERASER ? lineWidth * 4 : lineWidth;
+      ctx.lineWidth   = strokeW;
       ctx.lineCap     = 'round';
       ctx.lineJoin    = 'round';
       ctx.beginPath();
@@ -526,7 +631,7 @@ function WhiteboardCanvas({ roomId, user, theme }) {
         normX: canvas && canvas.width ? x / canvas.width : undefined,
         normY: canvas && canvas.height ? y / canvas.height : undefined,
         color,
-        lineWidth: tool === TOOLS.ERASER ? lineWidth * 4 : Number(lineWidth),
+        lineWidth: strokeW,
         tool,
       });
       prevCoord.current = { x, y };
@@ -656,90 +761,161 @@ function WhiteboardCanvas({ roomId, user, theme }) {
     }
   };
 
-  // Export Typed Notes Directly to PDF Document
+  // Save & Export typed lecture notes directly as PDF (Full Unicode, Urdu Nastaliq & Highlight Support)
   const handleExportNotesPDF = () => {
     if (!typedNotes || !typedNotes.trim()) {
       showToast('⚠️ No notes to export');
       return;
     }
     try {
+      showToast('⏳ Generating PDF notes...');
+      const lines = typedNotes.split('\n');
+
+      const canvasWidth = 1240;
+      const pageHeightPx = 1754;
+      const margin = 70;
+      const contentWidth = canvasWidth - (margin * 2);
+
+      const pages = [];
+      let currentPageCanvas = document.createElement('canvas');
+      currentPageCanvas.width = canvasWidth;
+      currentPageCanvas.height = pageHeightPx;
+      let ctx = currentPageCanvas.getContext('2d');
+
+      const renderHeader = (cCtx, pageNum) => {
+        cCtx.fillStyle = '#ffffff';
+        cCtx.fillRect(0, 0, canvasWidth, pageHeightPx);
+
+        // Header slate banner
+        cCtx.fillStyle = '#0f172a';
+        cCtx.fillRect(0, 0, canvasWidth, 140);
+
+        // Title
+        cCtx.fillStyle = '#ffffff';
+        cCtx.font = 'bold 36px "Segoe UI", Roboto, sans-serif';
+        cCtx.textAlign = 'left';
+        cCtx.fillText('SyncLearn — Teacher Lecture Notes', margin, 65);
+
+        // Subtitle & Metadata
+        cCtx.fillStyle = '#94a3b8';
+        cCtx.font = '20px "Segoe UI", Roboto, sans-serif';
+        cCtx.fillText(`Classroom ID: ${roomId || 'Live Room'}   |   Date: ${new Date().toLocaleString()}`, margin, 105);
+
+        // Footer
+        cCtx.fillStyle = '#94a3b8';
+        cCtx.font = '18px "Segoe UI", Roboto, sans-serif';
+        cCtx.textAlign = 'center';
+        cCtx.fillText(`SyncLearn Live Classroom  •  Page ${pageNum}`, canvasWidth / 2, pageHeightPx - 40);
+      };
+
+      let pageNumber = 1;
+      renderHeader(ctx, pageNumber);
+      let curY = 195;
+      const defaultLineHeight = 38;
+
+      for (let i = 0; i < lines.length; i++) {
+        const rawLine = lines[i];
+        if (!rawLine.trim()) {
+          curY += 20;
+          continue;
+        }
+
+        const isUrdu = /[\u0600-\u06FF]/.test(rawLine);
+        const isHeading = rawLine.startsWith('#') || rawLine.startsWith('Topic:') || rawLine.startsWith('Chapter:');
+        const isPinned = rawLine.startsWith('📌');
+
+        const cleanLine = isHeading && rawLine.startsWith('#') ? rawLine.replace(/^#+\s*/, '') : rawLine;
+        const fontName = isUrdu 
+          ? '"Jameel Noori Nastaleeq", "Noto Nastaliq Urdu", "Segoe UI", Tahoma, sans-serif'
+          : '"Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+        const fontSize = isHeading ? 30 : 22;
+        const lineHeight = isUrdu ? 52 : (isHeading ? 46 : defaultLineHeight);
+
+        // Page break check
+        if (curY + lineHeight > pageHeightPx - 90) {
+          pages.push(currentPageCanvas);
+          currentPageCanvas = document.createElement('canvas');
+          currentPageCanvas.width = canvasWidth;
+          currentPageCanvas.height = pageHeightPx;
+          ctx = currentPageCanvas.getContext('2d');
+          pageNumber++;
+          renderHeader(ctx, pageNumber);
+          curY = 195;
+        }
+
+        // Pinned line highlight pill background
+        if (isPinned) {
+          ctx.fillStyle = 'rgba(6, 182, 212, 0.12)';
+          if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(margin - 10, curY - 26, contentWidth + 20, lineHeight + 6, 8);
+            ctx.fill();
+          } else {
+            ctx.fillRect(margin - 10, curY - 26, contentWidth + 20, lineHeight + 6);
+          }
+        }
+
+        ctx.font = `${isHeading ? 'bold' : 'normal'} ${fontSize}px ${fontName}`;
+
+        if (isUrdu) {
+          ctx.textAlign = 'right';
+          ctx.fillStyle = isHeading ? '#0284c7' : '#1e293b';
+          ctx.fillText(cleanLine, canvasWidth - margin, curY);
+        } else {
+          ctx.textAlign = 'left';
+          const parts = cleanLine.split(/(==[^=]+==)/g);
+          let curX = margin;
+
+          parts.forEach(part => {
+            if (part.startsWith('==') && part.endsWith('==') && part.length > 4) {
+              const text = part.slice(2, -2);
+              ctx.font = `bold ${fontSize}px ${fontName}`;
+              const textWidth = ctx.measureText(text).width;
+
+              ctx.fillStyle = '#fef08a';
+              if (ctx.roundRect) {
+                ctx.beginPath();
+                ctx.roundRect(curX - 4, curY - fontSize + 4, textWidth + 8, fontSize + 8, 4);
+                ctx.fill();
+              } else {
+                ctx.fillRect(curX - 4, curY - fontSize + 4, textWidth + 8, fontSize + 8);
+              }
+
+              ctx.fillStyle = '#854d0e';
+              ctx.fillText(text, curX, curY);
+              curX += textWidth + 8;
+            } else if (part) {
+              ctx.font = `${isHeading ? 'bold' : 'normal'} ${fontSize}px ${fontName}`;
+              ctx.fillStyle = isHeading ? '#0284c7' : '#1e293b';
+              ctx.fillText(part, curX, curY);
+              curX += ctx.measureText(part).width;
+            }
+          });
+        }
+
+        curY += lineHeight;
+      }
+
+      pages.push(currentPageCanvas);
+
       const pdf = new jsPDF({
         orientation: 'portrait',
         unit: 'mm',
         format: 'a4'
       });
 
-      const pageWidth = pdf.internal.pageSize.getWidth();
-      const pageHeight = pdf.internal.pageSize.getHeight();
-      const margin = 16;
-      const maxLineWidth = pageWidth - (margin * 2);
+      const pdfW = pdf.internal.pageSize.getWidth();
+      const pdfH = pdf.internal.pageSize.getHeight();
 
-      // Top banner
-      pdf.setFillColor(15, 23, 42); // slate-900
-      pdf.rect(0, 0, pageWidth, 28, 'F');
-
-      pdf.setFont('helvetica', 'bold');
-      pdf.setFontSize(16);
-      pdf.setTextColor(255, 255, 255);
-      pdf.text('SyncLearn - Teacher Lecture Notes', margin, 13);
-
-      pdf.setFont('helvetica', 'normal');
-      pdf.setFontSize(9);
-      pdf.setTextColor(148, 163, 184); // slate-400
-      pdf.text(`Room: ${roomId || 'Live Room'}   |   Date: ${new Date().toLocaleString()}`, margin, 21);
-
-      // Body Notes
-      let yPos = 38;
-      const lineHeight = 6.5;
-
-      const paragraphs = typedNotes.split('\n');
-
-      for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
-        const para = paragraphs[pIdx];
-        if (!para.trim()) {
-          yPos += 4;
-          continue;
-        }
-
-        const isHeading = para.startsWith('#') || para.startsWith('Topic:') || para.startsWith('Chapter:');
-        const isBullet = para.startsWith('•') || para.startsWith('◆') || para.startsWith('➜') || para.startsWith('✔') || para.startsWith('★') || /^\d+\./.test(para);
-
-        if (isHeading) {
-          pdf.setFont('helvetica', 'bold');
-          pdf.setFontSize(13);
-          pdf.setTextColor(99, 102, 241); // indigo
-        } else if (isBullet) {
-          pdf.setFont('helvetica', 'normal');
-          pdf.setFontSize(11);
-          pdf.setTextColor(30, 41, 59);
-        } else {
-          pdf.setFont('helvetica', 'normal');
-          pdf.setFontSize(11);
-          pdf.setTextColor(30, 41, 59);
-        }
-
-        const wrappedLines = pdf.splitTextToSize(para, maxLineWidth);
-        for (let l = 0; l < wrappedLines.length; l++) {
-          if (yPos + lineHeight > pageHeight - margin) {
-            pdf.addPage();
-            yPos = margin + 5;
-          }
-          pdf.text(wrappedLines[l], margin, yPos);
-          yPos += lineHeight;
-        }
-      }
-
-      // Footer
-      const totalPages = pdf.internal.getNumberOfPages();
-      for (let i = 1; i <= totalPages; i++) {
-        pdf.setPage(i);
-        pdf.setFontSize(8);
-        pdf.setTextColor(148, 163, 184);
-        pdf.text(`Page ${i} of ${totalPages}  •  SyncLearn Classroom Notes`, pageWidth / 2, pageHeight - 8, { align: 'center' });
-      }
+      pages.forEach((pageCanvas, idx) => {
+        if (idx > 0) pdf.addPage();
+        const imgData = pageCanvas.toDataURL('image/png', 0.95);
+        pdf.addImage(imgData, 'PNG', 0, 0, pdfW, pdfH);
+      });
 
       pdf.save(`Lecture_Notes_${roomId || 'SyncLearn'}_${Date.now()}.pdf`);
-      showToast('📄 Notes saved as PDF!');
+      showToast('📄 Notes saved as PDF with full formatting & Urdu support!');
     } catch (err) {
       console.error('Notes PDF export failed:', err);
       showToast('⚠️ Notes PDF error');
@@ -774,68 +950,58 @@ function WhiteboardCanvas({ roomId, user, theme }) {
             {isInstructor ? (
               <>
                 <div className="wb-typing-header">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: '1.1rem' }}>⌨️</span>
-                    <div>
-                      <h4 className="wb-typing-title">
-                        Typing Pad
-                      </h4>
-                      <span className="wb-typing-subtitle">
-                        Type, highlight words & live sync notes
-                      </span>
+                  <div className="wb-typing-header-top">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: '1.15rem' }}>⌨️</span>
+                      <h4 className="wb-typing-title">Typing Pad</h4>
+                    </div>
+
+                    <div className="wb-typing-header-actions">
+                      {/* Urdu / English Language Mode Toggle */}
+                      <button
+                        type="button"
+                        className={`wb-lang-toggle-btn ${isUrduMode ? 'urdu-active' : ''}`}
+                        onClick={() => {
+                          setIsUrduMode(!isUrduMode);
+                          showToast(!isUrduMode ? '🇵🇰 Urdu typing mode enabled (Phonetic keyboard & on-screen keys ready)' : '🇬🇧 English typing mode active');
+                        }}
+                        title={isUrduMode ? "Switch to English Typing" : "Switch to Urdu Typing (اردو ٹائپنگ)"}
+                      >
+                        <span>{isUrduMode ? '🇵🇰 اردو ON' : '🇬🇧 ENG'}</span>
+                      </button>
+
+                      {/* Save / Export Notes as PDF Button */}
+                      <button
+                        type="button"
+                        className="wb-export-notes-btn"
+                        onClick={handleExportNotesPDF}
+                        title="Save typed lecture notes directly as PDF document"
+                      >
+                        <span>📥 Export PDF</span>
+                      </button>
                     </div>
                   </div>
 
-                  {/* Save / Export Notes as PDF Button */}
-                  <button
-                    type="button"
-                    className="wb-export-notes-btn"
-                    onClick={handleExportNotesPDF}
-                    title="Save typed lecture notes directly as PDF document"
-                  >
-                    <span>📥 Export PDF</span>
-                  </button>
+                  <span className="wb-typing-subtitle">
+                    Type, highlight words & live sync notes
+                  </span>
                 </div>
 
                 {/* Word Highlight & Pin Formatting Bar */}
-                <div style={{ display: 'flex', gap: 6, marginBottom: 8, flexWrap: 'wrap' }}>
+                <div className="wb-typing-toolbar">
                   <button
                     type="button"
                     onClick={handleHighlightSelection}
+                    className="wb-typing-format-btn highlight-btn"
                     title="Highlight selected word or insert ==word=="
-                    style={{
-                      background: 'rgba(234, 179, 8, 0.2)',
-                      border: '1px solid rgba(234, 179, 8, 0.5)',
-                      color: '#fef08a',
-                      padding: '4px 10px',
-                      borderRadius: 6,
-                      fontSize: '0.75rem',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4
-                    }}
                   >
                     <span>🖍️ Highlight Word</span>
                   </button>
                   <button
                     type="button"
                     onClick={handlePinPoint}
+                    className="wb-typing-format-btn pin-btn"
                     title="Pin this line with 📌"
-                    style={{
-                      background: 'rgba(56, 189, 248, 0.2)',
-                      border: '1px solid rgba(56, 189, 248, 0.5)',
-                      color: '#7dd3fc',
-                      padding: '4px 10px',
-                      borderRadius: 6,
-                      fontSize: '0.75rem',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4
-                    }}
                   >
                     <span>📌 Pin Line</span>
                   </button>
@@ -844,12 +1010,90 @@ function WhiteboardCanvas({ roomId, user, theme }) {
                 {/* Multi-line Keyboard Typing Input */}
                 <textarea
                   ref={textareaRef}
-                  className="wb-typing-textarea"
+                  className={`wb-typing-textarea ${isUrduMode ? 'urdu-mode' : ''}`}
                   value={typedNotes}
                   onChange={e => handleTeacherNoteChange(e.target.value)}
-                  placeholder="Teacher can write lecture notes, code, or formulas here using keyboard..."
-                  rows={10}
+                  onKeyDown={handleKeyDownUrdu}
+                  dir={isUrduMode ? 'rtl' : 'ltr'}
+                  lang={isUrduMode ? 'ur' : 'en'}
+                  placeholder={
+                    isUrduMode
+                      ? "یہاں اردو میں اپنے نوٹس ٹائپ کریں... (انگریزی کی بورڈ سے آواز کے مطابق یا نیچے بٹن دبا کر لکھیں)"
+                      : "Teacher can write lecture notes, code, or formulas here using keyboard..."
+                  }
+                  rows={8}
                 />
+
+                {/* On-Screen Quick Urdu Character Strip for Mobile & PC */}
+                {isUrduMode && (
+                  <div className="wb-urdu-strip-container">
+                    <div className="wb-urdu-strip-header">
+                      <span>🇵🇰 اردو کی بورڈ (Click or Tap):</span>
+                      <span className="wb-urdu-hint">Phonetic English typing also active (a = ا, b = ب, etc.)</span>
+                    </div>
+                    <div className="wb-urdu-chars-row">
+                      {URDU_QUICK_CHARS.map(char => (
+                        <button
+                          key={char}
+                          type="button"
+                          className="wb-urdu-char-btn"
+                          onClick={() => insertUrduCharacter(char)}
+                          title={`Insert ${char}`}
+                        >
+                          {char}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        className="wb-urdu-char-btn action-key"
+                        onClick={() => insertUrduCharacter(' ')}
+                        title="Space (فاصلہ)"
+                      >
+                        فاصلہ
+                      </button>
+                      <button
+                        type="button"
+                        className="wb-urdu-char-btn action-key"
+                        onClick={() => insertUrduCharacter('\n')}
+                        title="New Line (نئی سطر)"
+                      >
+                        ↵ سطر
+                      </button>
+                      <button
+                        type="button"
+                        className="wb-urdu-char-btn action-key backspace-key"
+                        onClick={() => {
+                          const el = textareaRef.current;
+                          if (!el) return;
+                          const start = el.selectionStart;
+                          const end = el.selectionEnd;
+                          if (start === end && start > 0) {
+                            const updated = typedNotes.substring(0, start - 1) + typedNotes.substring(end);
+                            handleTeacherNoteChange(updated);
+                            setTimeout(() => {
+                              if (textareaRef.current) {
+                                textareaRef.current.focus();
+                                textareaRef.current.setSelectionRange(start - 1, start - 1);
+                              }
+                            }, 0);
+                          } else if (start !== end) {
+                            const updated = typedNotes.substring(0, start) + typedNotes.substring(end);
+                            handleTeacherNoteChange(updated);
+                            setTimeout(() => {
+                              if (textareaRef.current) {
+                                textareaRef.current.focus();
+                                textareaRef.current.setSelectionRange(start, start);
+                              }
+                            }, 0);
+                          }
+                        }}
+                        title="Backspace (مٹائیں)"
+                      >
+                        ⌫
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {/* Action Bar */}
                 <div className="wb-typing-footer">
@@ -865,18 +1109,17 @@ function WhiteboardCanvas({ roomId, user, theme }) {
                 </div>
               </>
             ) : (
-              /* Student Read-Only View of Teacher's Notes */
+              /* Student View: Strictly View-Only Teacher's Notes + Direct Export PDF (No personal notes/editing) */
               <div className="wb-student-notes-wrap">
                 <div className="wb-typing-header">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontSize: '1.1rem' }}>👨‍🏫</span>
-                    <div>
-                      <h4 className="wb-typing-title">
-                        Typing Pad (Teacher's Notes)
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, flex: 1 }}>
+                    <span style={{ fontSize: '1.2rem', flexShrink: 0 }}>👨‍🏫</span>
+                    <div style={{ minWidth: 0 }}>
+                      <h4 className="wb-typing-title" style={{ margin: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        Teacher's Lecture Notes
                       </h4>
-                      <span style={{ fontSize: '0.72rem', color: '#4ade80', display: 'flex', alignItems: 'center', gap: 4 }}>
-                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', display: 'inline-block' }}></span>
-                        Live Synced with Teacher
+                      <span className="wb-typing-subtitle" style={{ display: 'block', marginTop: 2 }}>
+                        Live Synchronized
                       </span>
                     </div>
                   </div>
@@ -885,18 +1128,20 @@ function WhiteboardCanvas({ roomId, user, theme }) {
                     type="button"
                     className="wb-export-notes-btn"
                     onClick={handleExportNotesPDF}
-                    title="Save teacher's lecture notes directly as PDF document"
+                    title="Save lecture notes directly as PDF document"
                   >
                     <span>📥 Export PDF</span>
                   </button>
                 </div>
 
-                <div className="wb-student-notes-card">
+                <div className="wb-student-notes-card" dir={/[\u0600-\u06FF]/.test(typedNotes) ? 'rtl' : 'ltr'}>
                   <div className="wb-student-notes-body" style={{
                     fontSize: `${typingFontSize}px`,
                     color: isLightMode ? (typingTextColor === '#ffffff' ? '#0f172a' : typingTextColor) : typingTextColor,
                     margin: 0,
-                    lineHeight: 1.6
+                    lineHeight: /[\u0600-\u06FF]/.test(typedNotes) ? 1.85 : 1.6,
+                    fontFamily: /[\u0600-\u06FF]/.test(typedNotes) ? "'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', 'Segoe UI', Tahoma, sans-serif" : 'inherit',
+                    textAlign: /[\u0600-\u06FF]/.test(typedNotes) ? 'right' : 'left'
                   }}>
                     {renderFormattedNotes(typedNotes || "Teacher has not typed notes yet. As the teacher types, notes will appear here live.")}
                   </div>
@@ -935,8 +1180,8 @@ function WhiteboardCanvas({ roomId, user, theme }) {
                   <span>{isDrawingEnabled ? '✏️ Drawing ON' : '🔒 Drawing Locked'}</span>
                 </button>
               ) : (
-                <div className="wb-student-view-badge" title="Whiteboard drawing is restricted to Instructor">
-                  <span>👁️ View Only</span>
+                <div className={`wb-student-view-badge ${allowStudentDraw ? 'allowed' : ''}`} title={allowStudentDraw ? "Instructor has enabled student drawing" : "Drawing is controlled by the instructor"}>
+                  <span>{allowStudentDraw ? '✏️ Drawing Allowed' : '🔒 View Only (Teacher Canvas)'}</span>
                 </div>
               )}
 
@@ -969,39 +1214,68 @@ function WhiteboardCanvas({ roomId, user, theme }) {
 
                     {/* Master Drawing Tool Lock */}
                     {isInstructor ? (
-                      <div className="wb-panel-section">
-                        <div className="wb-section-title">✏️ Whiteboard Drawing Access</div>
-                        <button
-                          type="button"
-                          className={`wb-draw-permission-btn ${isDrawingEnabled ? 'unlocked' : 'locked'}`}
-                          onClick={() => {
-                            setIsDrawingEnabled(prev => !prev);
-                            showToast(!isDrawingEnabled ? '✏️ Whiteboard drawing enabled! You can draw now.' : '🔒 Whiteboard drawing locked.');
-                          }}
-                        >
-                          <span>{isDrawingEnabled ? '✏️ Drawing Enabled' : '🔒 Drawing Locked (Click to Draw)'}</span>
-                          <span className={`wb-status-pill ${isDrawingEnabled ? 'on' : 'off'}`}>
-                            {isDrawingEnabled ? 'ACTIVE' : 'LOCKED'}
-                          </span>
-                        </button>
-                        {!isDrawingEnabled ? (
-                          <p className="wb-lock-hint">🔒 Click the button above to unlock and enable pen/draw tools.</p>
-                        ) : (
-                          <p className="wb-lock-hint" style={{ color: '#4ade80' }}>✓ Drawing is active. Click to lock when finished.</p>
-                        )}
-                      </div>
+                      <>
+                        <div className="wb-panel-section">
+                          <div className="wb-section-title">✏️ Instructor Drawing Lock</div>
+                          <button
+                            type="button"
+                            className={`wb-draw-permission-btn ${isDrawingEnabled ? 'unlocked' : 'locked'}`}
+                            onClick={() => {
+                              setIsDrawingEnabled(prev => !prev);
+                              showToast(!isDrawingEnabled ? '✏️ Whiteboard drawing enabled! You can draw now.' : '🔒 Whiteboard drawing locked.');
+                            }}
+                          >
+                            <span>{isDrawingEnabled ? '✏️ Drawing Enabled' : '🔒 Drawing Locked (Click to Draw)'}</span>
+                            <span className={`wb-status-pill ${isDrawingEnabled ? 'on' : 'off'}`}>
+                              {isDrawingEnabled ? 'ACTIVE' : 'LOCKED'}
+                            </span>
+                          </button>
+                          {!isDrawingEnabled ? (
+                            <p className="wb-lock-hint">🔒 Click the button above to unlock and enable pen/draw tools.</p>
+                          ) : (
+                            <p className="wb-lock-hint" style={{ color: '#4ade80' }}>✓ Drawing is active. Click to lock when finished.</p>
+                          )}
+                        </div>
+
+                        {/* Student Drawing Permission Toggle */}
+                        <div className="wb-panel-section">
+                          <div className="wb-section-title">👥 Student Drawing Permission</div>
+                          <button
+                            type="button"
+                            className={`wb-draw-permission-btn ${allowStudentDraw ? 'unlocked' : 'locked'}`}
+                            onClick={handleToggleStudentDraw}
+                          >
+                            <span>{allowStudentDraw ? '✏️ Student Drawing: ALLOWED' : '🔒 Student Drawing: LOCKED'}</span>
+                            <span className={`wb-status-pill ${allowStudentDraw ? 'on' : 'off'}`}>
+                              {allowStudentDraw ? 'ALLOWED' : 'LOCKED'}
+                            </span>
+                          </button>
+                          <p className="wb-lock-hint">
+                            {allowStudentDraw
+                              ? '✓ All students can now draw on the whiteboard.'
+                              : '🔒 Students cannot draw until you unlock permission.'}
+                          </p>
+                        </div>
+                      </>
                     ) : (
                       <div className="wb-panel-section">
                         <div className="wb-section-title">Whiteboard Access</div>
-                        <div className="wb-student-restricted-box">
-                          <span>🔒 Student View-Only</span>
-                          <p>Whiteboard drawing is restricted to the instructor. You are viewing the live lecture stream.</p>
-                        </div>
+                        {allowStudentDraw ? (
+                          <div className="wb-student-allowed-box" style={{ background: 'rgba(34, 197, 94, 0.15)', border: '1px solid rgba(34, 197, 94, 0.4)', padding: '8px 10px', borderRadius: 6, fontSize: '0.74rem' }}>
+                            <span style={{ color: '#4ade80', fontWeight: 700 }}>✏️ Drawing Allowed by Teacher</span>
+                            <p style={{ margin: '4px 0 0 0', opacity: 0.9 }}>You can draw on the canvas using mouse, touch, or pen!</p>
+                          </div>
+                        ) : (
+                          <div className="wb-student-restricted-box">
+                            <span>🔒 Canvas View Only</span>
+                            <p>Drawing is locked by the teacher. You will be able to draw once the teacher enables student drawing.</p>
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {/* 1. Drawing Tools (Only visible to Instructor) */}
-                    {isInstructor && (
+                    {/* 1. Drawing Tools (Available for Instructor or when Student Drawing is enabled) */}
+                    {(isInstructor || allowStudentDraw) && (
                       <div className="wb-panel-section">
                         <div className="wb-section-title">Draw Tools</div>
                         <div className="wb-tools-grid">
@@ -1026,21 +1300,23 @@ function WhiteboardCanvas({ roomId, user, theme }) {
                           >
                             📏 Line
                           </button>
-                          <button
-                            type="button"
-                            className="wb-panel-btn wb-btn-danger"
-                            onClick={clearBoard}
-                            style={{ gridColumn: 'span 3', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontWeight: 700 }}
-                            title="Clear entire whiteboard canvas"
-                          >
-                            🗑️ Clear Board
-                          </button>
+                          {isInstructor && (
+                            <button
+                              type="button"
+                              className="wb-panel-btn wb-btn-danger"
+                              onClick={clearBoard}
+                              style={{ gridColumn: 'span 3', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontWeight: 700 }}
+                              title="Clear entire whiteboard canvas"
+                            >
+                              🗑️ Clear Board
+                            </button>
+                          )}
                         </div>
                       </div>
                     )}
 
-                    {/* 2. Color Palette & Thickness (Only visible to Instructor) */}
-                    {isInstructor && (
+                    {/* 2. Color Palette & Thickness (Available for Instructor or when Student Drawing is enabled) */}
+                    {(isInstructor || allowStudentDraw) && (
                       <div className="wb-panel-section">
                         <div className="wb-section-title">Colors & Stroke</div>
                         <div className="wb-colors-row">
@@ -1158,18 +1434,16 @@ function WhiteboardCanvas({ roomId, user, theme }) {
           <canvas
             ref={canvasRef}
             className="wb-drawing-canvas"
-            onMouseDown={startDrawing}
-            onMouseMove={draw}
-            onMouseUp={stopDrawing}
-            onMouseLeave={handleMouseLeave}
-            onTouchStart={startDrawing}
-            onTouchMove={draw}
-            onTouchEnd={stopDrawing}
+            onPointerDown={startDrawing}
+            onPointerMove={draw}
+            onPointerUp={stopDrawing}
+            onPointerCancel={stopDrawing}
+            onPointerLeave={handleMouseLeave}
             style={{
               display: 'block',
               width: '100%',
               height: '100%',
-              cursor: !isInstructor || !isDrawingEnabled ? 'default' : tool === TOOLS.ERASER ? 'cell' : tool === TOOLS.LASER ? 'none' : 'crosshair',
+              cursor: (!isInstructor && !allowStudentDraw) ? 'default' : tool === TOOLS.ERASER ? 'cell' : tool === TOOLS.LASER ? 'none' : 'crosshair',
               touchAction: 'none',
             }}
           />

@@ -142,13 +142,21 @@ a:hover { color: #38bdf8; }
 }
 .logo-icon { font-size: 1.4rem; }
 .logo-text {
-  font-size: 1.15rem;
-  font-weight: 800;
-  background: linear-gradient(135deg, #00d2ff, #38bdf8, #ffffff);
+  font-size: 1.2rem;
+  font-weight: 900;
+  background: linear-gradient(135deg, #0284c7 0%, #00d2ff 60%, #0891b2 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.02em;
+  display: inline-block;
+}
+
+[data-theme="dark"] .logo-text,
+.dark-theme .logo-text {
+  background: linear-gradient(135deg, #38bdf8 0%, #00d2ff 50%, #67e8f9 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 /* ===== SHARED NAV BACK BTN ===== */

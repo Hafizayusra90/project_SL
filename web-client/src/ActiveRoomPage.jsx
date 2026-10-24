@@ -13,169 +13,209 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [peerVolume, setPeerVolume] = useState(100);
+  const [hasVideoFrame, setHasVideoFrame] = useState(false);
 
   const [streamTracks, setStreamTracks] = useState({ hasVideo: false, hasAudio: false });
 
-  // Monitor live remote stream tracks so state is never mismatched
-  useEffect(() => {
-    const evaluateTracks = (s) => {
-      if (!s) return;
-      const v = s.getVideoTracks?.() || [];
-      const a = s.getAudioTracks?.() || [];
-      setStreamTracks({
-        hasVideo: v.some(t => t.enabled && t.readyState === 'live'),
-        hasAudio: a.some(t => t.enabled && t.readyState === 'live')
-      });
-    };
-
-    const s = peer._remoteStreams?.[0] || peer.streams?.[0];
-    if (s) evaluateTracks(s);
-
-    peer.on('stream', evaluateTracks);
-    peer.on('track', (t, s) => evaluateTracks(s));
-    return () => {
-      peer.removeListener('stream', evaluateTracks);
-    };
-  }, [peer]);
-
-  // If mediaState is received from socket use it; otherwise fallback to whether stream actually has live track
-  const isVideoOn = mediaState !== undefined ? Boolean(mediaState?.videoOn) : streamTracks.hasVideo;
-  const isMicOn = mediaState !== undefined ? Boolean(mediaState?.micOn) : streamTracks.hasAudio;
-  const isInstructorPeer = peerInfo?.userRole === 'instructor';
-  const peerName = peerInfo?.userName || (isInstructorPeer ? 'Instructor' : 'Peer');
-
   const audioCtxRef = useRef(null);
   const sourceNodeRef = useRef(null);
-  const clonedTrackRef = useRef(null);
+  const currentVideoTrackIdRef = useRef(null);
+  const currentAudioTrackIdRef = useRef(null);
 
-  useEffect(() => {
-    let animId;
+  // Synchronize remote video and audio tracks directly from native WebRTC receivers and simple-peer streams
+  const syncRemoteMedia = () => {
+    if (!peer) return;
 
-    const setupStream = (stream) => {
-      if (!stream) return;
+    let videoTrack = null;
+    let audioTrack = null;
 
-      if (videoRef.current) {
-        if (videoRef.current.srcObject !== stream) {
-          videoRef.current.srcObject = stream;
-        }
-        const vPromise = videoRef.current.play();
-        if (vPromise !== undefined) {
-          vPromise.catch((err) => {
-            console.warn('Remote video play notice:', err);
-            // If browser autoplay policy rejects unmuted video before user tap, temporarily mute video element so video renders without black screen!
-            if (videoRef.current) {
-              videoRef.current.muted = true;
-              videoRef.current.play().catch(() => {});
-            }
-          });
-        }
+    // 1. Simple-peer _remoteStreams and streams (verified active decoded media)
+    const allStreams = [...(peer._remoteStreams || []), ...(peer.streams || [])];
+    for (const s of allStreams) {
+      if (!videoTrack && typeof s.getVideoTracks === 'function') {
+        const vt = s.getVideoTracks().find(t => t.readyState !== 'ended');
+        if (vt) videoTrack = vt;
       }
-
-      if (audioRef.current) {
-        if (audioRef.current.srcObject !== stream) {
-          audioRef.current.srcObject = stream;
-        }
-        audioRef.current.volume = Math.max(0, Math.min(1, peerVolume / 100));
-        audioRef.current.muted = false;
-        
-        try {
-          const prefSpeaker = localStorage.getItem('synclearn_preferred_speaker');
-          if (prefSpeaker && prefSpeaker !== 'default' && typeof audioRef.current.setSinkId === 'function') {
-            audioRef.current.setSinkId(prefSpeaker).catch(() => {});
-          }
-        } catch (e) {}
-
-        const playPromise = audioRef.current.play();
-        if (playPromise !== undefined) {
-          playPromise
-            .then(() => setAudioBlocked(false))
-            .catch(err => {
-              console.warn('Audio playback waiting for user tap:', err);
-              setAudioBlocked(true);
-            });
-        }
+      if (!audioTrack && typeof s.getAudioTracks === 'function') {
+        const at = s.getAudioTracks().find(t => t.readyState !== 'ended');
+        if (at) audioTrack = at;
       }
+    }
 
-      // Live voice detection (Web Audio Analyser): CLONE the audio track so AudioContext NEVER steals native stream
+    // 2. Simple-peer _remoteTracks
+    if (!videoTrack && Array.isArray(peer._remoteTracks)) {
+      const item = peer._remoteTracks.find(t => t.track && t.track.kind === 'video' && t.track.readyState !== 'ended');
+      if (item) videoTrack = item.track;
+    }
+    if (!audioTrack && Array.isArray(peer._remoteTracks)) {
+      const item = peer._remoteTracks.find(t => t.track && t.track.kind === 'audio' && t.track.readyState !== 'ended');
+      if (item) audioTrack = item.track;
+    }
+
+    // 3. Native RTCPeerConnection receivers (direct WebRTC hardware pipe fallback)
+    if (peer._pc && typeof peer._pc.getReceivers === 'function') {
       try {
-        const rawAudioTrack = stream.getAudioTracks()[0];
+        const receivers = peer._pc.getReceivers();
+        if (!videoTrack) {
+          const vr = receivers.find(r => r.track && r.track.kind === 'video' && r.track.readyState !== 'ended');
+          if (vr) videoTrack = vr.track;
+        }
+        if (!audioTrack) {
+          const ar = receivers.find(r => r.track && r.track.kind === 'audio' && r.track.readyState !== 'ended');
+          if (ar) audioTrack = ar.track;
+        }
+      } catch (e) {}
+    }
+
+    setStreamTracks({
+      hasVideo: Boolean(videoTrack && videoTrack.readyState === 'live'),
+      hasAudio: Boolean(audioTrack && audioTrack.readyState === 'live')
+    });
+
+    // 4. Attach Live Video Track to <video> element
+    if (videoTrack && videoRef.current) {
+      videoTrack.enabled = true;
+      if (!videoTrack.muted) {
+        setHasVideoFrame(true);
+      }
+      videoTrack.onunmute = () => {
+        setHasVideoFrame(true);
+        if (videoRef.current) {
+          videoRef.current.play().catch(() => {});
+        }
+      };
+      if (currentVideoTrackIdRef.current !== videoTrack.id || !videoRef.current.srcObject) {
+        currentVideoTrackIdRef.current = videoTrack.id;
+        const vStream = new MediaStream([videoTrack]);
+        videoRef.current.srcObject = vStream;
+      }
+      // Ensure mobile / WebKit / Blink video autoplay requirements
+      videoRef.current.defaultMuted = true;
+      videoRef.current.muted = true;
+      videoRef.current.playsInline = true;
+      videoRef.current.setAttribute('playsinline', '');
+      videoRef.current.setAttribute('webkit-playsinline', '');
+      const vp = videoRef.current.play();
+      if (vp !== undefined) {
+        vp.then(() => setHasVideoFrame(true)).catch(() => {});
+      }
+    }
+
+    // 5. Attach Live Audio Track to dedicated <audio> element
+    if (audioTrack && audioRef.current) {
+      audioTrack.enabled = true;
+      if (!audioTrack.muted) {
+        setAudioBlocked(false);
+      }
+      audioTrack.onunmute = () => {
+        if (audioRef.current) {
+          audioRef.current.muted = false;
+          audioRef.current.play().then(() => setAudioBlocked(false)).catch(() => {});
+        }
+      };
+      if (currentAudioTrackIdRef.current !== audioTrack.id || !audioRef.current.srcObject) {
+        currentAudioTrackIdRef.current = audioTrack.id;
+        const aStream = new MediaStream([audioTrack]);
+        audioRef.current.srcObject = aStream;
+      }
+      audioRef.current.muted = false;
+      audioRef.current.volume = Math.max(0, Math.min(1, peerVolume / 100));
+
+      try {
+        const prefSpeaker = localStorage.getItem('synclearn_preferred_speaker');
+        if (prefSpeaker && prefSpeaker !== 'default' && typeof audioRef.current.setSinkId === 'function') {
+          audioRef.current.setSinkId(prefSpeaker).catch(() => {});
+        }
+      } catch (e) {}
+
+      const ap = audioRef.current.play();
+      if (ap !== undefined) {
+        ap.then(() => setAudioBlocked(false)).catch(err => {
+          console.warn('Audio play notice (waiting for user tap):', err);
+          setAudioBlocked(true);
+        });
+      }
+    }
+
+    // 6. Web Audio Analyser for Speaking Level Indicator
+    if (audioTrack && audioTrack.readyState === 'live') {
+      try {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
-        if (AudioCtx && rawAudioTrack) {
+        if (AudioCtx) {
           if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
-            audioCtxRef.current = new AudioCtx();
+            audioCtxRef.current = (window.__synclearnGlobalAudioCtx && window.__synclearnGlobalAudioCtx.state !== 'closed')
+              ? window.__synclearnGlobalAudioCtx
+              : new AudioCtx();
           }
           const ctx = audioCtxRef.current;
           if (ctx.state === 'suspended') {
             ctx.resume().catch(() => {});
           }
 
-          if (sourceNodeRef.current) {
-            try { sourceNodeRef.current.disconnect(); } catch (e) {}
-            sourceNodeRef.current = null;
+          if (!sourceNodeRef.current) {
+            const analyserStream = new MediaStream([audioTrack]);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 128;
+            analyser.smoothingTimeConstant = 0.3;
+
+            const source = ctx.createMediaStreamSource(analyserStream);
+            sourceNodeRef.current = source;
+            source.connect(analyser);
+
+            const dataArray = new Uint8Array(analyser.frequencyBinCount);
+            const detectVoice = () => {
+              if (analyser) {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0;
+                for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+                const avg = sum / dataArray.length;
+                setIsSpeaking(avg > 18);
+              }
+              animId = requestAnimationFrame(detectVoice);
+            };
+            detectVoice();
           }
-          if (clonedTrackRef.current) {
-            try { clonedTrackRef.current.stop(); } catch (e) {}
-            clonedTrackRef.current = null;
-          }
-          if (animId) {
-            cancelAnimationFrame(animId);
-          }
-
-          // CLONE the audio track into an isolated MediaStream specifically for the analyser!
-          const clonedTrack = rawAudioTrack.clone();
-          clonedTrackRef.current = clonedTrack;
-          const analyserStream = new MediaStream([clonedTrack]);
-
-          const analyser = ctx.createAnalyser();
-          analyser.fftSize = 128;
-          analyser.smoothingTimeConstant = 0.3;
-
-          const source = ctx.createMediaStreamSource(analyserStream);
-          sourceNodeRef.current = source;
-          source.connect(analyser);
-
-          const dataArray = new Uint8Array(analyser.frequencyBinCount);
-          const detectVoice = () => {
-            if (analyser) {
-              analyser.getByteFrequencyData(dataArray);
-              let sum = 0;
-              for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-              const avg = sum / dataArray.length;
-              setIsSpeaking(avg > 18);
-            }
-            animId = requestAnimationFrame(detectVoice);
-          };
-          detectVoice();
         }
       } catch (e) {
         console.warn('Voice level analyser notice:', e);
       }
-    };
+    }
+  };
 
-    peer.on('stream', setupStream);
-    peer.on('track', (track, stream) => {
-      if (stream) setupStream(stream);
-    });
+  let animId;
+  useEffect(() => {
+    syncRemoteMedia();
 
-    const existingStream = peer._remoteStreams?.[0] || peer.streams?.[0];
-    if (existingStream) {
-      setupStream(existingStream);
+    // Listen to SimplePeer events
+    peer.on('stream', syncRemoteMedia);
+    peer.on('track', syncRemoteMedia);
+    peer.on('connect', syncRemoteMedia);
+
+    // Listen directly to native RTCPeerConnection events
+    const pc = peer._pc;
+    if (pc) {
+      pc.addEventListener('track', syncRemoteMedia);
+      pc.addEventListener('connectionstatechange', syncRemoteMedia);
+      pc.addEventListener('iceconnectionstatechange', syncRemoteMedia);
     }
 
+    // Periodic safety sync (checks every 800ms)
+    const interval = setInterval(syncRemoteMedia, 800);
+
     return () => {
-      peer.removeListener('stream', setupStream);
-      peer.removeAllListeners('track');
+      peer.removeListener('stream', syncRemoteMedia);
+      peer.removeListener('track', syncRemoteMedia);
+      peer.removeListener('connect', syncRemoteMedia);
+      if (pc) {
+        pc.removeEventListener('track', syncRemoteMedia);
+        pc.removeEventListener('connectionstatechange', syncRemoteMedia);
+        pc.removeEventListener('iceconnectionstatechange', syncRemoteMedia);
+      }
+      clearInterval(interval);
       if (animId) cancelAnimationFrame(animId);
       if (sourceNodeRef.current) {
         try { sourceNodeRef.current.disconnect(); } catch (e) {}
         sourceNodeRef.current = null;
-      }
-      if (clonedTrackRef.current) {
-        try { clonedTrackRef.current.stop(); } catch (e) {}
-        clonedTrackRef.current = null;
-      }
-      if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') {
-        try { audioCtxRef.current.close(); } catch(e) {}
       }
     };
   }, [peer]);
@@ -188,7 +228,53 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
     }
   }, [peerVolume]);
 
+  // If mediaState is received from socket use it; otherwise fallback to whether stream actually has live track
+  const isVideoOn = mediaState !== undefined ? Boolean(mediaState?.videoOn) : streamTracks.hasVideo;
+  const isMicOn = mediaState !== undefined ? Boolean(mediaState?.micOn) : streamTracks.hasAudio;
+  const isInstructorPeer = peerInfo?.userRole === 'instructor';
+  const peerName = peerInfo?.userName || (isInstructorPeer ? 'Instructor' : 'Peer');
+
+  // Reactive watcher for peer microphone state changes: re-trigger audio element play immediately
+  useEffect(() => {
+    if (isMicOn) {
+      if (audioRef.current && audioRef.current.srcObject) {
+        audioRef.current.muted = false;
+        audioRef.current.volume = Math.max(0, Math.min(1, peerVolume / 100));
+        const p = audioRef.current.play();
+        if (p !== undefined) {
+          p.then(() => setAudioBlocked(false)).catch(err => {
+            console.warn('Microphone re-activation waiting for tap:', err);
+            setAudioBlocked(true);
+          });
+        }
+      }
+      if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      }
+    }
+  }, [isMicOn, mediaState, peerVolume]);
+
   const handleUnblockAudio = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        if (!window.__synclearnGlobalAudioCtx || window.__synclearnGlobalAudioCtx.state === 'closed') {
+          window.__synclearnGlobalAudioCtx = new AudioCtx();
+        }
+        const gCtx = window.__synclearnGlobalAudioCtx;
+        if (gCtx.state === 'suspended') {
+          gCtx.resume().catch(() => {});
+        }
+        try {
+          const silentBuf = gCtx.createBuffer(1, 1, 22050);
+          const bSource = gCtx.createBufferSource();
+          bSource.buffer = silentBuf;
+          bSource.connect(gCtx.destination);
+          bSource.start(0);
+        } catch (be) {}
+      }
+    } catch (e) {}
+
     if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
       audioCtxRef.current.resume().catch(() => {});
     }
@@ -209,10 +295,26 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
   useEffect(() => {
     const unlockAudio = () => {
       try {
-        if (window.__synclearnGlobalAudioCtx && window.__synclearnGlobalAudioCtx.state === 'suspended') {
-          window.__synclearnGlobalAudioCtx.resume().catch(() => {});
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          if (!window.__synclearnGlobalAudioCtx || window.__synclearnGlobalAudioCtx.state === 'closed') {
+            window.__synclearnGlobalAudioCtx = new AudioCtx();
+          }
+          const gCtx = window.__synclearnGlobalAudioCtx;
+          if (gCtx.state === 'suspended') {
+            gCtx.resume().catch(() => {});
+          }
+          // Silent buffer unlocker for mobile devices
+          try {
+            const silentBuf = gCtx.createBuffer(1, 1, 22050);
+            const bSource = gCtx.createBufferSource();
+            bSource.buffer = silentBuf;
+            bSource.connect(gCtx.destination);
+            bSource.start(0);
+          } catch(be) {}
         }
       } catch (e) {}
+
       if (audioCtxRef.current && audioCtxRef.current.state === 'suspended') {
         audioCtxRef.current.resume().then(() => setAudioBlocked(false)).catch(() => {});
       }
@@ -243,32 +345,62 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
     };
   }, [peerVolume]);
 
-  // Ensure video element plays when video is toggled on
+  // Ensure video element plays and attaches live track when video is toggled on or mediaState arrives
   useEffect(() => {
-    if (videoRef.current && isVideoOn && videoRef.current.srcObject) {
-      videoRef.current.play().catch(() => {});
+    if (isVideoOn) {
+      syncRemoteMedia();
+    } else {
+      setHasVideoFrame(false);
     }
-  }, [isVideoOn]);
+  }, [isVideoOn, mediaState]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }} className={isSpeaking ? 'peer-speaking-highlight' : ''}>
-      {/* ── Video Element ── */}
+      {/* ── Video Element (Always muted, video only, never blocks audio) ── */}
       <video
         autoPlay
         playsInline
+        muted
         ref={videoRef}
+        onLoadedMetadata={() => setHasVideoFrame(true)}
+        onLoadedData={() => setHasVideoFrame(true)}
+        onCanPlay={() => setHasVideoFrame(true)}
+        onPlaying={() => setHasVideoFrame(true)}
+        onTimeUpdate={() => {
+          if (videoRef.current && videoRef.current.videoWidth > 0) setHasVideoFrame(true);
+        }}
+        onError={() => setHasVideoFrame(false)}
         className="video-element"
         style={{
           width: '100%',
           height: '100%',
           objectFit: 'cover',
-          display: isVideoOn ? 'block' : 'none'
+          display: isVideoOn ? 'block' : 'none',
+          opacity: hasVideoFrame ? 1 : 0,
+          transition: 'opacity 0.2s ease'
         }}
       />
-      <audio autoPlay playsInline ref={audioRef} />
+      {/* ── Dedicated Remote Audio Element ── */}
+      <audio
+        autoPlay
+        playsInline
+        ref={audioRef}
+        onLoadedMetadata={() => {
+          if (audioRef.current) {
+            audioRef.current.muted = false;
+            audioRef.current.play().then(() => setAudioBlocked(false)).catch(() => {});
+          }
+        }}
+        onCanPlay={() => {
+          if (audioRef.current) {
+            audioRef.current.muted = false;
+            audioRef.current.play().then(() => setAudioBlocked(false)).catch(() => {});
+          }
+        }}
+      />
 
-      {/* ── Camera Off Avatar Placeholder (Image 4) ── */}
-      {!isVideoOn && (
+      {/* ── Camera Off or Waiting Avatar Placeholder (Image 4) ── */}
+      {(!isVideoOn || !hasVideoFrame) && (
         <div
           className="video-camera-off-container"
           style={{
@@ -280,6 +412,7 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
             justifyContent: 'center',
             gap: 10,
             zIndex: 2,
+            background: 'radial-gradient(circle at center, #1e293b 0%, #0f172a 100%)'
           }}
         >
           <div
@@ -301,6 +434,12 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
           >
             {(peerName || 'U').charAt(0).toUpperCase()}
           </div>
+          {isVideoOn && !hasVideoFrame && (
+            <span style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ width: 10, height: 10, border: '2px solid #38bdf8', borderTopColor: 'transparent', borderRadius: '50%', display: 'inline-block', animation: 'spin 1s linear infinite' }} />
+              Connecting video...
+            </span>
+          )}
         </div>
       )}
 
@@ -611,6 +750,7 @@ function createFallbackStream(userName, isInstructor) {
   if (stream) {
     const vTrack = stream.getVideoTracks()[0];
     if (vTrack) {
+      vTrack._isSynthetic = true;
       const origStop = vTrack.stop.bind(vTrack);
       vTrack.stop = () => {
         clearInterval(timer);
@@ -619,6 +759,32 @@ function createFallbackStream(userName, isInstructor) {
     }
   }
   return stream;
+}
+
+// ── Silent Web Audio Track Generator Fallback ──
+// Guarantees WebRTC RTCPeerConnection ALWAYS negotiates an audio transceiver in SDP offer/answer
+function createSilentAudioTrack() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return null;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const dst = ctx.createMediaStreamDestination();
+    const gain = ctx.createGain();
+    gain.gain.value = 0; // absolute silence
+    osc.connect(gain);
+    gain.connect(dst);
+    osc.start();
+    const track = dst.stream.getAudioTracks()[0];
+    if (track) {
+      track.enabled = false;
+      track._isSilentTrack = true;
+      return track;
+    }
+  } catch (e) {
+    console.warn('Silent audio track fallback notice:', e);
+  }
+  return null;
 }
 
 // ── Acquire Real Media with Automatic Audio / Synthetic Fallback ──
@@ -646,13 +812,22 @@ async function acquireMediaStream(userName, isInstructor) {
     stream = new MediaStream();
   }
 
+  // 2b. If stream still has no audio track, attach silent audio track so WebRTC transceiver negotiates:
+  if (stream.getAudioTracks().length === 0) {
+    const silentTrack = createSilentAudioTrack();
+    if (silentTrack) stream.addTrack(silentTrack);
+  }
+
   // 3. Attach fallback canvas video track ONLY if no real video track exists
   try {
     if (!hasRealVideo && stream.getVideoTracks().length === 0) {
       const canvasStream = createFallbackStream(userName, isInstructor);
       if (canvasStream) {
         const vTrack = canvasStream.getVideoTracks()[0];
-        if (vTrack) stream.addTrack(vTrack);
+        if (vTrack) {
+          vTrack._isSynthetic = true;
+          stream.addTrack(vTrack);
+        }
       }
     }
   } catch (e) {
@@ -944,14 +1119,18 @@ function ActiveRoomPage({
   const [isWaitingRoomEnabled, setIsWaitingRoomEnabled] = useState(false);
   const [hideProfilePictures, setHideProfilePictures] = useState(false);
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(true);
-  const [roomPasscode] = useState(() => {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
-    let code = '';
-    for (let i = 0; i < 6; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+  const [roomPasscode, setRoomPasscode] = useState('JxkYHk');
+  const [activeSecurityAlert, setActiveSecurityAlert] = useState(null);
+
+  // Auto-dismiss security alert after 8 seconds
+  useEffect(() => {
+    if (activeSecurityAlert) {
+      const timer = setTimeout(() => {
+        setActiveSecurityAlert(null);
+      }, 8500);
+      return () => clearTimeout(timer);
     }
-    return code;
-  });
+  }, [activeSecurityAlert]);
 
   const footerRef = useRef(null);
   const headerActionsRef = useRef(null);
@@ -1112,8 +1291,20 @@ function ActiveRoomPage({
   const [selectedFile, setSelectedFile]   = useState(null);
   const [pinnedDoubts, setPinnedDoubts]   = useState([]);
   const [showPinnedDoubts, setShowPinnedDoubts] = useState(true);
+  const [isChatLocked, setIsChatLocked]   = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [pendingAdmissionRequests, setPendingAdmissionRequests] = useState([]);
+  const [currentAdmissionPrompt, setCurrentAdmissionPrompt] = useState(null);
   const fileInputRef = useRef(null);
   const chatEndRef   = useRef(null);
+  const activeTabRef = useRef(activeTab);
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+    if (activeTab === 'chat') {
+      setUnreadChatCount(0);
+    }
+  }, [activeTab]);
 
   const cameraTrackRef  = useRef(null);
 
@@ -1228,6 +1419,11 @@ function ActiveRoomPage({
     }
   }, [roomId, isInstructor, user, participants.length, currentLectureTopic, roomHostName]);
 
+  const userRef = useRef(user);
+  userRef.current = user;
+  const isInstructorRef = useRef(isInstructor);
+  isInstructorRef.current = isInstructor;
+
   // WebRTC & Socket init
   useEffect(() => {
     socket.connect();
@@ -1238,12 +1434,12 @@ function ActiveRoomPage({
       let stream = initialStream;
       let hasRealVideo = false;
 
-      if (!stream || !stream.getTracks || stream.getTracks().length === 0) {
-        const acquired = await acquireMediaStream(user?.name, isInstructor);
+      if (!stream || !stream.getTracks || !stream.getTracks().some(t => t.readyState === 'live')) {
+        const acquired = await acquireMediaStream(userRef.current?.name, isInstructorRef.current);
         stream = acquired.stream;
         hasRealVideo = acquired.hasRealVideo;
       } else {
-        hasRealVideo = stream.getVideoTracks().length > 0;
+        hasRealVideo = stream.getVideoTracks().some(t => t.readyState === 'live' && !t._isSynthetic);
       }
 
       // If no audio track present, attempt to acquire a real hardware microphone track
@@ -1260,6 +1456,16 @@ function ActiveRoomPage({
         }
       }
 
+      // Guarantee at least 1 audio track so audio transceiver always negotiates
+      if (stream.getAudioTracks().length === 0) {
+        try {
+          const silentTrack = createSilentAudioTrack();
+          if (silentTrack) {
+            stream.addTrack(silentTrack);
+          }
+        } catch (e) {}
+      }
+
       // Guarantee at least 1 video track so video transceiver always negotiates
       if (stream.getVideoTracks().length === 0) {
         try {
@@ -1267,6 +1473,7 @@ function ActiveRoomPage({
           if (canvasStream) {
             const vTrack = canvasStream.getVideoTracks()[0];
             if (vTrack) {
+              vTrack._isSynthetic = true;
               vTrack.enabled = Boolean(initialVideoOn);
               stream.addTrack(vTrack);
             }
@@ -1301,17 +1508,22 @@ function ActiveRoomPage({
       socket.emit('join-room', {
         roomId: cleanRoom,
         userId: socket.id,
-        userName: user?.name || (isInstructor ? 'Instructor' : 'Student'),
-        userRole: isInstructor ? 'instructor' : (user?.role || 'student'),
+        userName: userRef.current?.name || (isInstructorRef.current ? 'Instructor' : 'Student'),
+        userRole: isInstructorRef.current ? 'instructor' : (userRef.current?.role || 'student'),
         roomTopic: currentLectureTopic
       });
       socket.emit('media-state-change', { roomId: cleanRoom, videoOn: shouldEnableVideo, micOn: Boolean(initialMicOn) });
 
       // WebRTC Peer signaling listeners
       socket.on('user-connected', userId => {
-        if (peersRef.current.some(p => p.peerID === userId)) {
-          const existing = peersRef.current.find(p => p.peerID === userId);
-          try { existing?.peer?.destroy(); } catch (e) {}
+        const existing = peersRef.current.find(p => p.peerID === userId);
+        if (existing && existing.peer && !existing.peer.destroyed) {
+          const pc = existing.peer._pc;
+          if (pc && (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected')) {
+            console.log(`ℹ️ Peer ${userId} already connected, skipping duplicate negotiation`);
+            return;
+          }
+          try { existing.peer.destroy(); } catch (e) {}
           peersRef.current = peersRef.current.filter(p => p.peerID !== userId);
         }
         const activeMedia = userStreamRef.current || currentStream;
@@ -1327,9 +1539,14 @@ function ActiveRoomPage({
       });
 
       socket.on('user-joined', payload => {
-        if (peersRef.current.some(p => p.peerID === payload.callerID)) {
-          const existing = peersRef.current.find(p => p.peerID === payload.callerID);
-          try { existing?.peer?.destroy(); } catch (e) {}
+        const existing = peersRef.current.find(p => p.peerID === payload.callerID);
+        if (existing && existing.peer && !existing.peer.destroyed) {
+          const pc = existing.peer._pc;
+          if (pc && (pc.connectionState === 'connected' || pc.iceConnectionState === 'connected')) {
+            console.log(`ℹ️ Peer ${payload.callerID} already connected, skipping duplicate offer`);
+            return;
+          }
+          try { existing.peer.destroy(); } catch (e) {}
           peersRef.current = peersRef.current.filter(p => p.peerID !== payload.callerID);
         }
         const activeMedia = userStreamRef.current || currentStream;
@@ -1346,7 +1563,18 @@ function ActiveRoomPage({
 
       socket.on('receiving-returned-signal', payload => {
         const item = peersRef.current.find(p => p.peerID === payload.id);
-        if (item) item.peer.signal(payload.signal);
+        if (item && item.peer && !item.peer.destroyed) {
+          try {
+            const pc = item.peer._pc;
+            if (pc && pc.signalingState === 'stable') {
+              console.log(`ℹ️ Peer ${payload.id} connection is already stable, skipping duplicate answer`);
+              return;
+            }
+            item.peer.signal(payload.signal);
+          } catch (e) {
+            console.warn('Error passing returned signal to peer:', e);
+          }
+        }
       });
 
       socket.on('user-disconnected', userId => {
@@ -1367,8 +1595,110 @@ function ActiveRoomPage({
       });
     });
 
-    // Receive live chat messages
-    socket.on('receive-message', data => setMessages(prev => [...prev, data]));
+    // Receive live chat messages (with strict deduplication & unread counter)
+    socket.on('receive-message', data => {
+      if (!data) return;
+      setMessages(prev => {
+        if (data.id && prev.some(m => m.id === data.id)) return prev;
+        if (prev.some(m => m.message === data.message && m.senderId === data.senderId && m.time === data.time)) return prev;
+        return [...prev, data];
+      });
+
+      // Track unread messages when chat tab is closed
+      if (activeTabRef.current !== 'chat' && data.senderId !== socket.id) {
+        setUnreadChatCount(prev => prev + 1);
+      }
+    });
+
+    // Student Admission Waiting Room (Instructor Listeners)
+    socket.on('admission-request', ({ student, pendingList }) => {
+      if (isInstructor) {
+        if (Array.isArray(pendingList)) {
+          setPendingAdmissionRequests(pendingList);
+        } else if (student) {
+          setPendingAdmissionRequests(prev => {
+            if (prev.some(s => s.socketId === student.socketId)) return prev;
+            return [...prev, student];
+          });
+        }
+        if (student) {
+          setCurrentAdmissionPrompt(student);
+          // Play notification chime
+          try {
+            const AudioCtx = window.AudioContext || window.webkitAudioContext;
+            if (AudioCtx) {
+              const ctx = window.__synclearnGlobalAudioCtx || new AudioCtx();
+              if (ctx && ctx.state !== 'closed') {
+                if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+                osc.frequency.setValueAtTime(880, ctx.currentTime + 0.12);
+                gain.gain.setValueAtTime(0.2, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.35);
+              }
+            }
+          } catch(e) {}
+        }
+      }
+    });
+
+    socket.on('pending-admissions-list', (list) => {
+      if (isInstructor && Array.isArray(list)) {
+        setPendingAdmissionRequests(list);
+        if (list.length === 0) {
+          setCurrentAdmissionPrompt(null);
+        }
+      }
+    });
+
+    // Secure Access Control: Passcode Sync & Real-time Security Alerts
+    socket.on('room-passcode', ({ passcode }) => {
+      if (passcode) {
+        setRoomPasscode(passcode);
+        window.__synclearnRoomPasscode = passcode;
+        try { localStorage.setItem('synclearn_passcode_' + cleanRoom, passcode); } catch(e) {}
+      }
+    });
+
+    socket.on('security-alert', (alert) => {
+      if (isInstructor && alert) {
+        setActiveSecurityAlert(alert);
+        try {
+          const AudioCtx = window.AudioContext || window.webkitAudioContext;
+          if (AudioCtx) {
+            const ctx = window.__synclearnGlobalAudioCtx || new AudioCtx();
+            if (ctx && ctx.state !== 'closed') {
+              if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+              const osc = ctx.createOscillator();
+              const gain = ctx.createGain();
+              osc.type = 'sawtooth';
+              osc.frequency.setValueAtTime(440, ctx.currentTime);
+              osc.frequency.setValueAtTime(330, ctx.currentTime + 0.15);
+              gain.gain.setValueAtTime(0.18, ctx.currentTime);
+              gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+              osc.connect(gain);
+              gain.connect(ctx.destination);
+              osc.start();
+              osc.stop(ctx.currentTime + 0.4);
+            }
+          }
+        } catch (e) {}
+      }
+    });
+
+    // Realtime chat lock status (teacher controls student chat capability)
+    socket.on('chat-lock-status', ({ isLocked }) => {
+      setIsChatLocked(Boolean(isLocked));
+    });
+    socket.on('chat-lock-error', (data) => {
+      showToast(data?.message || '🔒 Chat has been locked by the instructor', 'error');
+    });
 
     // Receive live lecture notes
     socket.on('receive-transcription', data => {
@@ -1611,11 +1941,17 @@ function ActiveRoomPage({
     socket.on('disconnect', () => setIsConnected(false));
 
     return () => {
+      peersRef.current.forEach(p => {
+        try { p.peer?.destroy(); } catch (e) {}
+      });
+      peersRef.current = [];
       userStreamRef.current?.getTracks().forEach(t => t.stop());
       socket.off('connect'); socket.off('disconnect');
       socket.off('user-connected'); socket.off('user-joined');
       socket.off('receiving-returned-signal'); socket.off('user-disconnected');
       socket.off('receive-message'); socket.off('receive-transcription');
+      socket.off('admission-request'); socket.off('pending-admissions-list');
+      socket.off('chat-lock-status'); socket.off('chat-lock-error');
       socket.off('force-mute'); socket.off('force-removed');
       socket.off('force-toggle-camera'); socket.off('peer-media-state-change');
       socket.off('room-media-states-sync');
@@ -1629,9 +1965,11 @@ function ActiveRoomPage({
       socket.off('recording-status-change');
       socket.off('peer-joined-notification');
       socket.off('meeting-ended-by-host');
+      socket.off('room-passcode');
+      socket.off('security-alert');
       socket.disconnect();
     };
-  }, [roomId, isInstructor, user?.name, user?.role]);
+  }, [roomId]);
 
   // ─── Live Mic Voice Volume Detection (Web Audio API) ───
   useEffect(() => {
@@ -2308,58 +2646,120 @@ function ActiveRoomPage({
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
       { urls: 'stun:stun.cloudflare.com:3478' },
-      {
-        urls: 'turn:openrelay.metered.ca:80',
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
-      },
-      {
-        urls: 'turn:openrelay.metered.ca:443',
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
-      },
-      {
-        urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-        username: 'openrelayproject',
-        credential: 'openrelayproject'
-      }
+      { urls: 'stun:stun.relay.metered.ca:80' },
+      { urls: 'stun:stun.services.mozilla.com' }
     ]
   };
 
   function createPeer(userToSignal, callerID, stream) {
     const peer = new Peer({ initiator: true, trickle: false, stream, config: iceServersConfig });
     peer.on('signal', signal => socket.emit('sending-signal', { userToSignal, callerID, signal }));
-    peer.on('error', err => console.warn('Peer connection warning (initiator):', err));
+    peer.on('error', err => {
+      console.warn('Peer connection error (initiator):', err);
+      socket.emit('webrtc-peer-error', { peerId: userToSignal, error: err?.message || String(err), role: isInstructor ? 'instructor' : 'student' });
+    });
+    if (peer._pc) {
+      peer._pc.onconnectionstatechange = () => {
+        console.log(`📡 Peer connection state (${userToSignal}):`, peer._pc.connectionState);
+        socket.emit('webrtc-peer-state', { peerId: userToSignal, state: peer._pc.connectionState, iceState: peer._pc.iceConnectionState });
+        if (peer._pc.connectionState === 'failed') {
+          console.log(`🔄 Attempting ICE restart for ${userToSignal}...`);
+          try {
+            if (peer._pc.restartIce) peer._pc.restartIce();
+          } catch(e) {}
+        }
+      };
+      peer._pc.oniceconnectionstatechange = () => {
+        console.log(`❄️ Peer ICE state (${userToSignal}):`, peer._pc.iceConnectionState);
+        socket.emit('webrtc-peer-state', { peerId: userToSignal, state: peer._pc.connectionState, iceState: peer._pc.iceConnectionState });
+        if (peer._pc.iceConnectionState === 'failed') {
+          try {
+            if (peer._pc.restartIce) peer._pc.restartIce();
+          } catch(e) {}
+        }
+      };
+    }
     return peer;
   }
 
   function addPeer(incomingSignal, callerID, stream) {
     const peer = new Peer({ initiator: false, trickle: false, stream, config: iceServersConfig });
     peer.on('signal', signal => socket.emit('returning-signal', { signal, callerID }));
-    peer.on('error', err => console.warn('Peer connection warning (receiver):', err));
+    peer.on('error', err => {
+      console.warn('Peer connection error (receiver):', err);
+      socket.emit('webrtc-peer-error', { peerId: callerID, error: err?.message || String(err), role: isInstructor ? 'instructor' : 'student' });
+    });
+    if (peer._pc) {
+      peer._pc.onconnectionstatechange = () => {
+        console.log(`📡 Peer connection state (${callerID}):`, peer._pc.connectionState);
+        socket.emit('webrtc-peer-state', { peerId: callerID, state: peer._pc.connectionState, iceState: peer._pc.iceConnectionState });
+        if (peer._pc.connectionState === 'failed') {
+          try {
+            if (peer._pc.restartIce) peer._pc.restartIce();
+          } catch(e) {}
+        }
+      };
+      peer._pc.oniceconnectionstatechange = () => {
+        console.log(`❄️ Peer ICE state (${callerID}):`, peer._pc.iceConnectionState);
+        socket.emit('webrtc-peer-state', { peerId: callerID, state: peer._pc.connectionState, iceState: peer._pc.iceConnectionState });
+        if (peer._pc.iceConnectionState === 'failed') {
+          try {
+            if (peer._pc.restartIce) peer._pc.restartIce();
+          } catch(e) {}
+        }
+      };
+    }
     peer.signal(incomingSignal);
     return peer;
   }
+
+  const findAudioSender = (pc) => {
+    if (!pc) return null;
+    const senders = pc.getSenders ? pc.getSenders() : [];
+    let s = senders.find(x => x.track && x.track.kind === 'audio');
+    if (s) return s;
+    const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
+    const t = transceivers.find(x => 
+      (x.sender?.track && x.sender.track.kind === 'audio') ||
+      (x.receiver?.track && x.receiver.track.kind === 'audio') ||
+      x.mid === '0' || x.mid === 'audio'
+    );
+    if (t?.sender) return t.sender;
+    s = senders.find(x => x.dtmf !== undefined && x.dtmf !== null);
+    if (s) return s;
+    return senders.find(x => !x.track || x.track.kind !== 'video') || null;
+  };
+
+  const findVideoSender = (pc) => {
+    if (!pc) return null;
+    const senders = pc.getSenders ? pc.getSenders() : [];
+    let s = senders.find(x => x.track && x.track.kind === 'video');
+    if (s) return s;
+    const transceivers = pc.getTransceivers ? pc.getTransceivers() : [];
+    const t = transceivers.find(x => 
+      (x.sender?.track && x.sender.track.kind === 'video') ||
+      (x.receiver?.track && x.receiver.track.kind === 'video') ||
+      x.mid === '1' || x.mid === 'video'
+    );
+    if (t?.sender) return t.sender;
+    return senders.find(x => !x.dtmf && (!x.track || x.track.kind !== 'audio')) || null;
+  };
 
   const toggleMic = async () => {
     const nextMic = !micOn;
 
     if (nextMic) {
-      // 1. If an existing live audio track is already available, re-enable it immediately
+      // 1. If an existing live audio track is already available AND is NOT synthetic/silent, re-enable it immediately
       const existingAudioTrack = userStreamRef.current?.getAudioTracks()[0];
-      if (existingAudioTrack && existingAudioTrack.readyState === 'live') {
+      if (existingAudioTrack && existingAudioTrack.readyState === 'live' && !existingAudioTrack._isSilentTrack) {
         existingAudioTrack.enabled = true;
         peersRef.current.forEach(p => {
           try {
             const pc = p.peer?._pc;
             if (pc) {
-              const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'audio') || s.kind === 'audio');
+              const sender = findAudioSender(pc);
               if (sender) {
-                if (sender.track !== existingAudioTrack) {
-                  sender.replaceTrack(existingAudioTrack);
-                }
-              } else if (p.peer?.addTrack) {
-                p.peer.addTrack(existingAudioTrack, userStreamRef.current);
+                sender.replaceTrack(existingAudioTrack).catch(() => {});
               }
             }
           } catch (e) {
@@ -2403,11 +2803,9 @@ function ActiveRoomPage({
             try {
               const pc = p.peer?._pc;
               if (pc) {
-                const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'audio') || s.kind === 'audio');
+                const sender = findAudioSender(pc);
                 if (sender) {
-                  sender.replaceTrack(newAudioTrack);
-                } else if (p.peer?.addTrack) {
-                  p.peer.addTrack(newAudioTrack, userStreamRef.current);
+                  sender.replaceTrack(newAudioTrack).catch(() => {});
                 }
               }
             } catch (e) {
@@ -2442,6 +2840,32 @@ function ActiveRoomPage({
     const nextVideo = !videoOn;
 
     if (nextVideo) {
+      // 1. If an existing live video track is already available AND is NOT synthetic, re-enable it immediately
+      const existingVideoTrack = userStreamRef.current?.getVideoTracks()[0];
+      if (existingVideoTrack && existingVideoTrack.readyState === 'live' && !existingVideoTrack._isSynthetic) {
+        existingVideoTrack.enabled = true;
+        peersRef.current.forEach(p => {
+          try {
+            const pc = p.peer?._pc;
+            if (pc) {
+              const sender = findVideoSender(pc);
+              if (sender) {
+                sender.replaceTrack(existingVideoTrack).catch(() => {});
+              }
+            }
+          } catch (e) {
+            console.warn('Error syncing existing video track to peer:', e);
+          }
+        });
+
+        setUserStream(new MediaStream(userStreamRef.current.getTracks()));
+        setVideoOn(true);
+        socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn: true, micOn });
+        showToast('📹 Camera connected!');
+        return;
+      }
+
+      // 2. Otherwise acquire fresh hardware camera track or synthetic fallback
       let newTrack = null;
       try {
         const camStream = await navigator.mediaDevices.getUserMedia({
@@ -2460,6 +2884,7 @@ function ActiveRoomPage({
           const fallback = createFallbackStream(user?.name, isInstructor);
           if (fallback) {
             newTrack = fallback.getVideoTracks()[0];
+            if (newTrack) newTrack._isSynthetic = true;
           }
         } catch (e) {
           console.warn('Fallback stream error:', e);
@@ -2480,9 +2905,9 @@ function ActiveRoomPage({
           try {
             const pc = p.peer?._pc;
             if (pc) {
-              const sender = pc.getSenders()?.find(s => (s.track && s.track.kind === 'video') || s.kind === 'video');
+              const sender = findVideoSender(pc);
               if (sender) {
-                sender.replaceTrack(newTrack);
+                sender.replaceTrack(newTrack).catch(() => {});
               } else if (p.peer?.addTrack) {
                 p.peer.addTrack(newTrack, userStreamRef.current);
               }
@@ -2494,7 +2919,7 @@ function ActiveRoomPage({
         setUserStream(new MediaStream(userStreamRef.current.getTracks()));
         setVideoOn(true);
         socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn: true, micOn });
-        showToast(newTrack.label?.includes('canvas') ? '🎨 Virtual camera stream active' : '📹 Camera connected!');
+        showToast(newTrack._isSynthetic ? '🎨 Virtual camera stream active' : '📹 Camera connected!');
         return;
       }
     } else {
@@ -2534,8 +2959,21 @@ function ActiveRoomPage({
     e.target.value = null;
   };
 
+  const handleToggleChatLock = () => {
+    if (!isInstructor) return;
+    const nextLocked = !isChatLocked;
+    setIsChatLocked(nextLocked);
+    const cleanRoom = cleanRoomId(roomId);
+    socket.emit('toggle-chat-lock', { roomId: cleanRoom, isLocked: nextLocked });
+    showToast(nextLocked ? '🔒 Student chat is now locked' : '🔓 Student chat is unlocked');
+  };
+
   const sendMessage = (e) => {
     e.preventDefault();
+    if (!isInstructor && isChatLocked) {
+      showToast('🔒 Chat has been locked by the teacher.', 'error');
+      return;
+    }
     if (!newMessage.trim() && !selectedFile) return;
 
     const msgPayload = {
@@ -2685,6 +3123,31 @@ function ActiveRoomPage({
     showToast('📥 Chat log downloaded as TXT!');
   };
 
+  const handleAdmitStudent = (studentSocketId) => {
+    socket.emit('admit-student', { roomId: cleanRoomId(roomId), targetSocketId: studentSocketId });
+    setPendingAdmissionRequests(prev => prev.filter(s => s.socketId !== studentSocketId));
+    if (currentAdmissionPrompt?.socketId === studentSocketId) {
+      setCurrentAdmissionPrompt(null);
+    }
+    showToast('✅ Student admitted to classroom');
+  };
+
+  const handleDenyStudent = (studentSocketId) => {
+    socket.emit('deny-student', { roomId: cleanRoomId(roomId), targetSocketId: studentSocketId });
+    setPendingAdmissionRequests(prev => prev.filter(s => s.socketId !== studentSocketId));
+    if (currentAdmissionPrompt?.socketId === studentSocketId) {
+      setCurrentAdmissionPrompt(null);
+    }
+    showToast('❌ Student admission denied', 'error');
+  };
+
+  const handleAdmitAllStudents = () => {
+    socket.emit('admit-all-students', { roomId: cleanRoomId(roomId) });
+    setPendingAdmissionRequests([]);
+    setCurrentAdmissionPrompt(null);
+    showToast('✅ All pending students admitted');
+  };
+
   return (
     <div className="room-container">
       {/* ── Floating Toast Notification ── */}
@@ -2693,6 +3156,182 @@ function ActiveRoomPage({
           <div className="toast-content">
             <span className="toast-icon">{toast.type === 'error' ? '⚠️' : '✅'}</span>
             <span>{toast.message}</span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Security Alert: Real-Time Silent Drop on Unauthorized Access Attempts ── */}
+      {isInstructor && activeSecurityAlert && (
+        <div
+          className="admission-alert-popup security-alert-drop"
+          style={{
+            position: 'fixed',
+            top: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 99999,
+            background: 'linear-gradient(135deg, #1e1b4b 0%, #0f172a 100%)',
+            border: '2px solid #ef4444',
+            borderRadius: '16px',
+            padding: '12px 20px',
+            boxShadow: '0 14px 44px rgba(0, 0, 0, 0.75), 0 0 24px rgba(239, 68, 68, 0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '16px',
+            minWidth: '380px',
+            maxWidth: '92vw'
+          }}
+        >
+          <div
+            style={{
+              width: '42px',
+              height: '42px',
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, #ef4444, #b91c1c)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '1.3rem',
+              color: '#fff',
+              flexShrink: 0,
+              boxShadow: '0 0 16px rgba(239, 68, 68, 0.5)'
+            }}
+          >
+            🛡️
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
+              <span style={{ fontSize: '0.70rem', textTransform: 'uppercase', letterSpacing: '0.06em', background: 'rgba(239, 68, 68, 0.2)', color: '#f87171', padding: '2px 8px', borderRadius: '4px', fontWeight: 800 }}>
+                Security Alert • Blocked
+              </span>
+              <span style={{ fontSize: '0.70rem', color: '#94a3b8' }}>
+                {new Date(activeSecurityAlert.timestamp || Date.now()).toLocaleTimeString()}
+              </span>
+            </div>
+            <div style={{ fontSize: '0.92rem', fontWeight: 700, color: '#f8fafc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              Unauthorized attempt by <span style={{ color: '#f87171' }}>{activeSecurityAlert.userName}</span> was blocked.
+            </div>
+            <div style={{ fontSize: '0.76rem', color: '#cbd5e1', marginTop: '2px' }}>
+              Attempted Passcode: <code style={{ background: 'rgba(0,0,0,0.3)', padding: '1px 5px', borderRadius: '4px', color: '#fca5a5' }}>{activeSecurityAlert.attemptedPasscode}</code>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveSecurityAlert(null)}
+            style={{
+              background: 'rgba(255, 255, 255, 0.1)',
+              color: '#e2e8f0',
+              border: 'none',
+              borderRadius: '8px',
+              padding: '6px 12px',
+              fontWeight: 700,
+              fontSize: '0.80rem',
+              cursor: 'pointer'
+            }}
+            title="Dismiss Alert"
+          >
+            ✕ Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Optional fallback for manual admission if used */}
+      {isInstructor && currentAdmissionPrompt && !activeSecurityAlert && (
+        <div
+          className="admission-alert-popup"
+          style={{
+            position: 'fixed',
+            top: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 99999,
+            background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)',
+            border: '2px solid #06b6d4',
+            borderRadius: '16px',
+            padding: '14px 22px',
+            boxShadow: '0 14px 44px rgba(0, 0, 0, 0.75), 0 0 28px rgba(6, 182, 212, 0.45)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '18px',
+            minWidth: '380px',
+            maxWidth: '92vw'
+          }}
+        >
+          <div
+            style={{
+              width: '46px',
+              height: '46px',
+              borderRadius: '50%',
+              background: 'linear-gradient(135deg, #06b6d4, #0284c7)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '1.4rem',
+              color: '#fff',
+              flexShrink: 0,
+              boxShadow: '0 0 16px rgba(6, 182, 212, 0.6)'
+            }}
+          >
+            🔔
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '3px' }}>
+              <span style={{ fontSize: '0.72rem', textTransform: 'uppercase', letterSpacing: '0.06em', background: 'rgba(6, 182, 212, 0.2)', color: '#38bdf8', padding: '2px 8px', borderRadius: '4px', fontWeight: 800 }}>
+                Waiting Room
+              </span>
+              {pendingAdmissionRequests.length > 1 && (
+                <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                  +{pendingAdmissionRequests.length - 1} more waiting
+                </span>
+              )}
+            </div>
+            <div style={{ fontSize: '0.96rem', fontWeight: 800, color: '#f8fafc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              Student <span style={{ color: '#38bdf8' }}>{currentAdmissionPrompt.userName}</span> is trying to join the class.
+            </div>
+            <div style={{ fontSize: '0.78rem', color: '#94a3b8', marginTop: '2px' }}>
+              Allow or Deny entry into the classroom session?
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => handleAdmitStudent(currentAdmissionPrompt.socketId)}
+              style={{
+                background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '8px',
+                padding: '8px 16px',
+                fontWeight: 800,
+                fontSize: '0.86rem',
+                cursor: 'pointer',
+                boxShadow: '0 4px 14px rgba(16, 185, 129, 0.4)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px'
+              }}
+            >
+              ✓ Allow
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDenyStudent(currentAdmissionPrompt.socketId)}
+              style={{
+                background: 'rgba(239, 68, 68, 0.15)',
+                color: '#ef4444',
+                border: '1.5px solid #ef4444',
+                borderRadius: '8px',
+                padding: '7px 14px',
+                fontWeight: 700,
+                fontSize: '0.86rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px'
+              }}
+            >
+              ✕ Deny
+            </button>
           </div>
         </div>
       )}
@@ -2898,7 +3537,14 @@ function ActiveRoomPage({
                   }}
                   title="Workspaces (Dual Whiteboard, Video, All-In-One, Cameras)"
                 >
-                  <span className="sidebar-item-icon">🔲</span>
+                  <span className="sidebar-item-icon" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                      <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                      <rect x="14" y="14" width="7" height="7" rx="1.5" />
+                      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                    </svg>
+                  </span>
                 </button>
 
                 <button
@@ -2948,7 +3594,14 @@ function ActiveRoomPage({
                     title="Click to expand/collapse Workspaces"
                   >
                     <div className="category-header-main">
-                      <span className="sidebar-item-icon">🔲</span>
+                      <span className="sidebar-item-icon" style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                          <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                          <rect x="14" y="14" width="7" height="7" rx="1.5" />
+                          <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                        </svg>
+                      </span>
                       <span className="category-header-title">Workspaces</span>
                     </div>
                     <span className="category-chevron">{activeCategory === 'workspace' ? '▾' : '▸'}</span>
@@ -3308,15 +3961,38 @@ function ActiveRoomPage({
                   {/* Chat Top Bar */}
                   <div className="chat-header-bar">
                     <span>💬 Classroom Discussion</span>
-                    <button
-                      type="button"
-                      className="chat-export-btn"
-                      onClick={downloadChatHistory}
-                      title="Export chat history to a text file"
-                    >
-                      📥 Export Chat
-                    </button>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      {isInstructor && (
+                        <button
+                          type="button"
+                          className={`chat-lock-toggle-btn ${isChatLocked ? 'locked' : ''}`}
+                          onClick={handleToggleChatLock}
+                          title={isChatLocked ? "Unlock student chat" : "Lock student chat"}
+                        >
+                          {isChatLocked ? '🔒 Chat Locked' : '🔓 Lock Chat'}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="chat-export-btn"
+                        onClick={downloadChatHistory}
+                        title="Export chat history to a text file"
+                      >
+                        📥 Export Chat
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Chat Lock Notification Banner */}
+                  {isChatLocked && (
+                    <div className={`chat-lock-status-banner ${isInstructor ? 'instructor-mode' : 'student-mode'}`}>
+                      {isInstructor ? (
+                        <span>🔒 <strong>Student chat is locked.</strong> Your messages and announcements will still be delivered.</span>
+                      ) : (
+                        <span>🔒 <strong>Chat has been locked by the teacher.</strong> Student messaging is paused right now.</span>
+                      )}
+                    </div>
+                  )}
 
                   {/* Pinned Doubts Accordion */}
                   {pinnedDoubts.length > 0 && (
@@ -3535,6 +4211,7 @@ function ActiveRoomPage({
                       onChange={handleFileSelect}
                       style={{ display: 'none' }}
                       accept="image/*,.pdf,.doc,.docx,.txt,.zip"
+                      disabled={!isInstructor && isChatLocked}
                     />
 
                     <div className="chat-input-row">
@@ -3543,7 +4220,8 @@ function ActiveRoomPage({
                         type="button"
                         className="chat-icon-btn"
                         onClick={() => fileInputRef.current?.click()}
-                        title="Attach Image or Document (under 3MB)"
+                        title={!isInstructor && isChatLocked ? "Chat is locked by teacher" : "Attach Image or Document (under 3MB)"}
+                        disabled={!isInstructor && isChatLocked}
                       >
                         📎
                       </button>
@@ -3553,7 +4231,8 @@ function ActiveRoomPage({
                         type="button"
                         className={`chat-doubt-toggle ${isDoubtMode ? 'active' : ''}`}
                         onClick={() => setIsDoubtMode(!isDoubtMode)}
-                        title={isDoubtMode ? "Marked as Doubt (will be highlighted & pinned)" : "Click to mark next message as Doubt"}
+                        title={!isInstructor && isChatLocked ? "Chat is locked by teacher" : isDoubtMode ? "Marked as Doubt (will be highlighted & pinned)" : "Click to mark next message as Doubt"}
+                        disabled={!isInstructor && isChatLocked}
                       >
                         <span>❓</span>
                         <span className="doubt-label-text">Doubt</span>
@@ -3563,16 +4242,23 @@ function ActiveRoomPage({
                       <div className="chat-input-wrapper">
                         <input
                           type="text"
-                          placeholder={isDoubtMode ? "Type your doubt question..." : "Type a message..."}
+                          placeholder={
+                            !isInstructor && isChatLocked
+                              ? "🔒 Chat has been locked by the teacher..."
+                              : isDoubtMode
+                              ? "Type your doubt question..."
+                              : "Type a message..."
+                          }
                           value={newMessage}
                           onChange={(e) => setNewMessage(e.target.value)}
-                          className={isDoubtMode ? "input-doubt-active" : ""}
+                          className={isDoubtMode ? "input-doubt-active" : (!isInstructor && isChatLocked ? "input-chat-locked" : "")}
+                          disabled={!isInstructor && isChatLocked}
                         />
                         <button
                           type="submit"
                           className="chat-send-icon-btn"
-                          disabled={!newMessage.trim() && !selectedFile}
-                          title="Send message"
+                          disabled={(!isInstructor && isChatLocked) || (!newMessage.trim() && !selectedFile)}
+                          title={!isInstructor && isChatLocked ? "Chat is locked by teacher" : "Send message"}
                         >
                           <Send size={15} />
                         </button>
@@ -3925,6 +4611,54 @@ function ActiveRoomPage({
                           <span>{isRoomLocked ? 'Unlock Room' : 'Lock Room'}</span>
                         </button>
                       </div>
+
+                      {/* Waiting Room Roster for Instructor */}
+                      {pendingAdmissionRequests.length > 0 && (
+                        <div style={{ marginBottom: '1.2rem', background: 'rgba(6, 182, 212, 0.08)', border: '1.5px solid rgba(6, 182, 212, 0.4)', borderRadius: '10px', padding: '12px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span>⏳ Waiting Room</span>
+                              <span style={{ background: '#0284c7', color: '#fff', borderRadius: '99px', padding: '1px 7px', fontSize: '0.72rem' }}>
+                                {pendingAdmissionRequests.length}
+                              </span>
+                            </span>
+                            {pendingAdmissionRequests.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={handleAdmitAllStudents}
+                                style={{ background: '#10b981', color: '#fff', border: 'none', borderRadius: '4px', padding: '3px 8px', fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer' }}
+                              >
+                                Admit All
+                              </button>
+                            )}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {pendingAdmissionRequests.map(student => (
+                              <div key={student.socketId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(15, 23, 42, 0.6)', padding: '6px 10px', borderRadius: '6px' }}>
+                                <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#f8fafc' }}>
+                                  👤 {student.userName}
+                                </span>
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAdmitStudent(student.socketId)}
+                                    style={{ background: '#10b981', color: '#fff', border: 'none', borderRadius: '4px', padding: '3px 8px', fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer' }}
+                                  >
+                                    Allow
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDenyStudent(student.socketId)}
+                                    style={{ background: 'rgba(239, 68, 68, 0.2)', color: '#ef4444', border: '1px solid #ef4444', borderRadius: '4px', padding: '2px 6px', fontSize: '0.74rem', fontWeight: 700, cursor: 'pointer' }}
+                                  >
+                                    Deny
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </>
                   )}
 
@@ -4393,39 +5127,50 @@ function ActiveRoomPage({
           )}
         </div>
 
-        {/* 4. Chat Button (Toggles sidebar panel on click) */}
+        {/* 4. Chat Button (Toggles sidebar panel on click with unread notifications) */}
         <div className="zoom-toolbar-btn-group">
-          <button
-            type="button"
-            className={`zoom-main-btn ${activeTab === 'chat' ? 'active-tab-btn' : ''}`}
-            onClick={() => setActiveTab(prev => prev === 'chat' ? null : 'chat')}
-            title={pinnedDoubts.length > 0 ? `${pinnedDoubts.length} un-resolved doubt(s) pinned` : "Open Live Chat"}
-          >
-            <div className="zoom-btn-icon" style={{ position: 'relative' }}>
-              💬
-              {pinnedDoubts.length > 0 && activeTab !== 'chat' && (
-                <span
-                  style={{
-                    position: 'absolute',
-                    top: -4,
-                    right: -6,
-                    background: '#ef4444',
-                    color: '#fff',
-                    borderRadius: '50%',
-                    padding: '1px 5px',
-                    fontSize: '0.62rem',
-                    fontWeight: 800,
-                    boxShadow: '0 0 8px rgba(239, 68, 68, 0.8)'
-                  }}
-                >
-                  {pinnedDoubts.length}
+          {(() => {
+            const totalUnread = (unreadChatCount || 0) + (pinnedDoubts.length || 0);
+            return (
+              <button
+                type="button"
+                className={`zoom-main-btn ${activeTab === 'chat' ? 'active-tab-btn' : ''}`}
+                onClick={() => {
+                  setActiveTab(prev => {
+                    const next = prev === 'chat' ? null : 'chat';
+                    if (next === 'chat') setUnreadChatCount(0);
+                    return next;
+                  });
+                }}
+                title={totalUnread > 0 ? `${totalUnread} new notification(s)` : "Open Live Chat"}
+              >
+                <div className="zoom-btn-icon" style={{ position: 'relative' }}>
+                  💬
+                  {totalUnread > 0 && activeTab !== 'chat' && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: -5,
+                        right: -7,
+                        background: unreadChatCount > 0 ? '#0284c7' : '#ef4444',
+                        color: '#fff',
+                        borderRadius: '50%',
+                        padding: '1px 5px',
+                        fontSize: '0.62rem',
+                        fontWeight: 900,
+                        boxShadow: unreadChatCount > 0 ? '0 0 10px rgba(2, 132, 199, 0.9)' : '0 0 8px rgba(239, 68, 68, 0.8)'
+                      }}
+                    >
+                      {totalUnread}
+                    </span>
+                  )}
+                </div>
+                <span className="zoom-btn-label">
+                  Chat {totalUnread > 0 && activeTab !== 'chat' ? `(${totalUnread})` : ''}
                 </span>
-              )}
-            </div>
-            <span className="zoom-btn-label">
-              Chat {pinnedDoubts.length > 0 && activeTab !== 'chat' ? `(${pinnedDoubts.length})` : ''}
-            </span>
-          </button>
+              </button>
+            );
+          })()}
         </div>
 
         </div>
@@ -4455,8 +5200,8 @@ function ActiveRoomPage({
               <div className="zoom-meeting-info-flyout footer-flyout" onClick={e => e.stopPropagation()}>
                 <div className="zoom-flyout-header">
                   <div className="zoom-info-title-wrap">
-                    <h3 className="zoom-info-meeting-title">SyncLearn Meeting</h3>
-                    <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Classroom • Encrypted</span>
+                    <div className="zoom-info-meeting-title" style={{ fontSize: '1rem', fontWeight: 800, color: theme === 'light' ? '#0f172a' : '#f8fafc', lineHeight: 1.2 }}>SyncLearn Meeting</div>
+                    <span style={{ fontSize: '0.72rem', color: theme === 'light' ? '#64748b' : '#94a3b8' }}>Classroom • Encrypted</span>
                   </div>
                   <button
                     type="button"
@@ -4495,62 +5240,68 @@ function ActiveRoomPage({
                   </div>
                 </div>
 
-                <div className="zoom-info-field-group">
-                  <span className="zoom-info-field-title">Passcode</span>
-                  <div className="zoom-info-field-value-row">
-                    <span className="zoom-info-field-val">{roomPasscode}</span>
-                    <button
-                      type="button"
-                      className="zoom-info-copy-btn"
-                      onClick={() => {
-                        navigator.clipboard?.writeText(roomPasscode);
-                        showToast('📋 Passcode copied!');
-                      }}
-                      title="Copy Passcode"
-                    >
-                      Copy
-                    </button>
+                {isInstructor && (
+                  <div className="zoom-info-field-group">
+                    <span className="zoom-info-field-title">Passcode</span>
+                    <div className="zoom-info-field-value-row">
+                      <span className="zoom-info-field-val">{roomPasscode}</span>
+                      <button
+                        type="button"
+                        className="zoom-info-copy-btn"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(roomPasscode);
+                          showToast('📋 Passcode copied!');
+                        }}
+                        title="Copy Passcode"
+                      >
+                        Copy
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
 
-                {/* 1. Mobile & WhatsApp Direct Shareable Link (HTTPS Cloudflare) */}
-                <div className="zoom-info-field-group">
-                  <span className="zoom-info-field-title" style={{ color: '#22c55e', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
-                    <span>📱 WhatsApp & Mobile Link</span>
-                  </span>
-                  <div className="zoom-info-field-value-row">
-                    <span className="zoom-info-field-val zoom-info-green-link" style={{ fontSize: '0.72rem', wordBreak: 'break-all', fontWeight: 700 }}>
-                      {getShareableLink(false)}
-                    </span>
-                    <button
-                      type="button"
-                      className="zoom-info-copy-btn"
-                      style={{ background: 'rgba(34, 197, 94, 0.2)', borderColor: '#22c55e', color: '#16a34a', fontWeight: 700 }}
-                      onClick={() => copyInviteLink(false)}
-                      title="Copy WhatsApp & Mobile Link (Sends as clickable green link in WhatsApp)"
-                    >
-                      Copy Link
-                    </button>
-                  </div>
-                </div>
+                {/* 1. Mobile & WhatsApp Direct Shareable Link (HTTPS Cloudflare) - Instructor Only */}
+                {isInstructor && (
+                  <>
+                    <div className="zoom-info-field-group">
+                      <span className="zoom-info-field-title" style={{ color: '#22c55e', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
+                        <span>📱 WhatsApp & Mobile Link</span>
+                      </span>
+                      <div className="zoom-info-field-value-row">
+                        <span className="zoom-info-field-val zoom-info-green-link" style={{ fontSize: '0.72rem', wordBreak: 'break-all', fontWeight: 700 }}>
+                          {getShareableLink(false)}
+                        </span>
+                        <button
+                          type="button"
+                          className="zoom-info-copy-btn"
+                          style={{ background: 'rgba(34, 197, 94, 0.2)', borderColor: '#22c55e', color: '#16a34a', fontWeight: 700 }}
+                          onClick={() => copyInviteLink(false)}
+                          title="Copy WhatsApp & Mobile Link (Sends as clickable green link in WhatsApp)"
+                        >
+                          Copy Link
+                        </button>
+                      </div>
+                    </div>
 
-                {/* 3. Local PC Link */}
-                <div className="zoom-info-field-group">
-                  <span className="zoom-info-field-title">💻 Local PC Link</span>
-                  <div className="zoom-info-field-value-row">
-                    <span className="zoom-info-field-val" style={{ fontSize: '0.68rem', wordBreak: 'break-all' }}>
-                      {getShareableLink(true)}
-                    </span>
-                    <button
-                      type="button"
-                      className="zoom-info-copy-btn"
-                      onClick={() => copyInviteLink(true)}
-                      title="Copy Local PC Link"
-                    >
-                      Copy PC
-                    </button>
-                  </div>
-                </div>
+                    {/* 3. Local PC Link */}
+                    <div className="zoom-info-field-group">
+                      <span className="zoom-info-field-title">💻 Local PC Link</span>
+                      <div className="zoom-info-field-value-row">
+                        <span className="zoom-info-field-val" style={{ fontSize: '0.68rem', wordBreak: 'break-all' }}>
+                          {getShareableLink(true)}
+                        </span>
+                        <button
+                          type="button"
+                          className="zoom-info-copy-btn"
+                          onClick={() => copyInviteLink(true)}
+                          title="Copy Local PC Link"
+                        >
+                          Copy PC
+                        </button>
+                      </div>
+                    </div>
+                  </>
+                )}
 
                 {/* 4. Host Connected Status */}
                 <div className="zoom-info-field-group">

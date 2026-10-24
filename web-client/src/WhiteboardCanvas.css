@@ -16,7 +16,7 @@
   top: 8px;
   left: 8px;
   right: 8px;
-  z-index: 1000;
+  z-index: 30;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -143,20 +143,43 @@
   position: absolute;
   top: calc(100% + 8px);
   left: 0;
-  width: 290px;
-  background: linear-gradient(180deg, rgba(8, 28, 52, 0.96) 0%, rgba(4, 18, 36, 0.98) 100%);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1.5px solid rgba(56, 189, 248, 0.35);
+  width: 300px;
+  max-height: calc(100vh - 125px);
+  overflow-y: auto !important;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  background: linear-gradient(180deg, rgba(8, 28, 52, 0.98) 0%, rgba(4, 18, 36, 0.99) 100%);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1.5px solid rgba(56, 189, 248, 0.4);
   border-radius: 14px;
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7), 0 0 20px rgba(0, 229, 255, 0.15);
-  padding: 14px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8), 0 0 24px rgba(0, 229, 255, 0.2);
+  padding: 14px 12px 16px 14px;
   z-index: 99999;
   pointer-events: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
   animation: wbFadeInDown 0.18s ease-out;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 189, 248, 0.5) transparent;
+}
+
+.wb-tools-dropdown-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.wb-tools-dropdown-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.wb-tools-dropdown-panel::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.45);
+  border-radius: 8px;
+}
+
+.wb-tools-dropdown-panel::-webkit-scrollbar-thumb:hover {
+  background: #38bdf8;
 }
 
 @keyframes wbFadeInDown {
@@ -179,8 +202,18 @@
   color: #38bdf8;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding-bottom: 6px;
+  padding-bottom: 8px;
   border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+  position: sticky;
+  top: -14px;
+  background: rgba(8, 28, 52, 0.98);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  z-index: 10;
+  margin: -14px -12px 0 -14px;
+  padding: 12px 14px 8px 14px;
+  border-top-left-radius: 12px;
+  border-top-right-radius: 12px;
 }
 
 .wb-panel-close-btn {
@@ -584,11 +617,27 @@
 }
 
 .wb-typing-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(56, 189, 248, 0.2);
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 5px !important;
+  padding-bottom: 8px !important;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.2) !important;
+  width: 100% !important;
+}
+
+.wb-typing-header-top {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  width: 100% !important;
+}
+
+.wb-typing-header-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex-shrink: 0 !important;
 }
 
 .wb-typing-title {
@@ -601,6 +650,74 @@
 .wb-typing-subtitle {
   font-size: 0.72rem !important;
   color: #94a3b8 !important;
+  margin: 0 !important;
+  line-height: 1.3 !important;
+}
+
+.wb-typing-toolbar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  margin-top: 4px !important;
+  margin-bottom: 6px !important;
+  flex-wrap: wrap !important;
+  width: 100% !important;
+}
+
+.wb-typing-format-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 11px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.wb-typing-format-btn.highlight-btn {
+  background: rgba(234, 179, 8, 0.18);
+  border: 1px solid rgba(234, 179, 8, 0.5);
+  color: #fef08a;
+}
+
+.wb-typing-format-btn.highlight-btn:hover {
+  background: rgba(234, 179, 8, 0.35);
+  transform: translateY(-1px);
+}
+
+.wb-typing-format-btn.pin-btn {
+  background: rgba(56, 189, 248, 0.18);
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  color: #7dd3fc;
+}
+
+.wb-typing-format-btn.pin-btn:hover {
+  background: rgba(56, 189, 248, 0.35);
+  transform: translateY(-1px);
+}
+
+[data-theme="light"] .wb-typing-format-btn.highlight-btn {
+  background: rgba(217, 119, 6, 0.12) !important;
+  border: 1.5px solid rgba(217, 119, 6, 0.45) !important;
+  color: #b45309 !important;
+}
+
+[data-theme="light"] .wb-typing-format-btn.highlight-btn:hover {
+  background: rgba(217, 119, 6, 0.22) !important;
+}
+
+[data-theme="light"] .wb-typing-format-btn.pin-btn {
+  background: rgba(8, 145, 178, 0.12) !important;
+  border: 1.5px solid rgba(8, 145, 178, 0.45) !important;
+  color: #0891b2 !important;
+}
+
+[data-theme="light"] .wb-typing-format-btn.pin-btn:hover {
+  background: rgba(8, 145, 178, 0.22) !important;
 }
 
 [data-theme="light"] .wb-typing-panel {
@@ -632,18 +749,20 @@
 .wb-export-notes-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   background: rgba(34, 197, 94, 0.18);
   color: #4ade80;
   border: 1px solid rgba(34, 197, 94, 0.45);
   border-radius: 7px;
-  padding: 5px 10px;
-  font-size: 0.76rem;
+  padding: 6px 12px;
+  font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.18s ease;
   font-family: inherit;
   flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .wb-export-notes-btn:hover {
@@ -651,6 +770,150 @@
   color: #ffffff;
   box-shadow: 0 2px 10px rgba(34, 197, 94, 0.35);
   transform: translateY(-1px);
+}
+
+/* Urdu / English Language Mode Toggle Button */
+.wb-lang-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(99, 102, 241, 0.18);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.45);
+  border-radius: 7px;
+  padding: 5px 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+.wb-lang-toggle-btn:hover {
+  background: rgba(99, 102, 241, 0.35);
+  transform: translateY(-1px);
+}
+.wb-lang-toggle-btn.urdu-active {
+  background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+  color: #ffffff;
+  border-color: #34d399;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.45);
+}
+
+/* Student Subtab Buttons (Live Teacher Notes vs My Notes) */
+.wb-subtab-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #94a3b8;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.wb-subtab-btn:hover {
+  color: #e2e8f0;
+  background: rgba(255, 255, 255, 0.05);
+}
+.wb-subtab-btn.active {
+  background: rgba(2, 132, 199, 0.25);
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+/* Urdu Textarea and Strip Styling */
+.wb-typing-textarea.urdu-mode {
+  font-family: 'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', 'Segoe UI', Tahoma, sans-serif !important;
+  font-size: 1.05rem !important;
+  line-height: 1.8 !important;
+  letter-spacing: 0.3px;
+  text-align: right;
+  direction: rtl;
+}
+
+.wb-urdu-strip-container {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(4, 18, 34, 0.85);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin-top: 4px;
+}
+
+.wb-urdu-strip-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.68rem;
+  color: #34d399;
+  font-weight: 700;
+}
+
+.wb-urdu-hint {
+  font-size: 0.62rem;
+  color: #94a3b8;
+  font-weight: normal;
+}
+
+.wb-urdu-chars-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-height: 110px;
+  overflow-y: auto;
+  padding-top: 2px;
+}
+
+.wb-urdu-char-btn {
+  background: rgba(15, 23, 42, 0.8);
+  color: #f1f5f9;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 4px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 4px;
+  font-size: 0.85rem;
+  font-family: 'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', 'Segoe UI', Tahoma, sans-serif;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.wb-urdu-char-btn:hover {
+  background: rgba(16, 185, 129, 0.3);
+  border-color: #34d399;
+  color: #ffffff;
+  transform: scale(1.08);
+}
+
+.wb-urdu-char-btn:active {
+  transform: scale(0.95);
+}
+
+.wb-urdu-char-btn.action-key {
+  font-family: inherit;
+  font-size: 0.7rem;
+  padding: 0 6px;
+  font-weight: 700;
+  background: rgba(30, 41, 59, 0.9);
+  color: #38bdf8;
+}
+
+.wb-urdu-char-btn.action-key.backspace-key {
+  color: #f87171;
+}
+
+.wb-student-view-badge.allowed {
+  background: rgba(34, 197, 94, 0.2) !important;
+  border-color: rgba(34, 197, 94, 0.5) !important;
+  color: #4ade80 !important;
 }
 
 .wb-live-chip {
@@ -1253,9 +1516,19 @@ canvas.wb-drawing-canvas {
   background: #ffffff !important;
   border-color: rgba(8, 145, 178, 0.35) !important;
   box-shadow: 0 16px 45px rgba(8, 145, 178, 0.22) !important;
+  scrollbar-color: rgba(8, 145, 178, 0.4) transparent !important;
+}
+
+[data-theme="light"] .wb-tools-dropdown-panel::-webkit-scrollbar-thumb {
+  background: rgba(8, 145, 178, 0.4) !important;
+}
+
+[data-theme="light"] .wb-tools-dropdown-panel::-webkit-scrollbar-thumb:hover {
+  background: #0891b2 !important;
 }
 
 [data-theme="light"] .wb-panel-header {
+  background: rgba(255, 255, 255, 0.98) !important;
   color: #042f2e !important;
   border-bottom-color: rgba(8, 145, 178, 0.2) !important;
 }

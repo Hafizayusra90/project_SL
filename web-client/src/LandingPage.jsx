@@ -49,11 +49,15 @@ function LandingPage({ onNavigate, onEnterWorkspace, theme, onToggleTheme }) {
           <span>⚡</span> Powered by WebRTC + Socket.io + AI
         </div>
 
-        <h1 className="hero-title">
+        <h1 className="hero-brand-title">
+          <span className="hero-brand-gradient">SyncLearn</span>
+        </h1>
+
+        <h2 className="hero-title">
           AI-Powered Real-Time{' '}
           <span className="gradient-text">Collaborative Learning</span>
           {' '}Platform
-        </h1>
+        </h2>
 
         <p className="hero-subtitle">
           Connect seamlessly with peers and instructors. Experience real-time video calls,
@@ -64,9 +68,6 @@ function LandingPage({ onNavigate, onEnterWorkspace, theme, onToggleTheme }) {
         <div className="hero-cta">
           <button className="large-primary-btn" onClick={onEnterWorkspace}>
             Get Started <span>→</span>
-          </button>
-          <button className="secondary-btn" onClick={() => onNavigate && onNavigate('demo')}>
-            🎬 Watch Demo
           </button>
         </div>
 

@@ -2,6 +2,8 @@ const Room = require('../models/Room');
 
 // In-memory room state
 const lockedRooms = new Set();
+const roomLockedChats = new Set(); // roomId -> boolean for student chat lock
+const roomStudentDrawingAllowed = new Set(); // roomId -> boolean for student whiteboard draw
 const roomUsers = new Map(); // roomId -> Map(socketId -> userObj)
 const roomVideoStates = new Map(); // roomId -> { mediaType, ytVideoId, videoSrc, currentTime, isPlaying, videoTitle }
 const roomWorkspaceViews = new Map(); // roomId -> view
@@ -9,6 +11,31 @@ const roomActiveQuizzes = new Map(); // roomId -> active quiz object
 const roomMediaStates = new Map(); // roomId -> Map(socketId -> { videoOn, micOn })
 const roomInstructors = new Map(); // roomId -> instructorName
 const roomTopics = new Map(); // roomId -> current lecture topic
+const roomPasscodes = new Map(); // roomId -> 6-char secure enrollment passcode
+
+const generatePasscode = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+};
+
+// Student Admission Waiting Room
+const pendingAdmissions = new Map(); // roomId -> Map(socketId -> { socketId, userId, userName, userRole, photo, timestamp })
+const admittedSockets = new Set(); // Set(socketId) of admitted students
+
+const getInstructorSockets = (roomId) => {
+  const sockets = [];
+  const currentMap = roomUsers.get(roomId);
+  if (currentMap) {
+    for (const [sId, u] of currentMap.entries()) {
+      if (u.userRole === 'instructor') sockets.push(sId);
+    }
+  }
+  return sockets;
+};
 
 const sanitizeRoomId = (raw) => {
   if (!raw) return '';
@@ -76,6 +103,7 @@ const syncHandler = (io, socket) => {
       roomUsers.set(roomId, new Map());
     }
     const currentRoomMap = roomUsers.get(roomId);
+    const isNewToRoom = !currentRoomMap.has(socket.id);
     currentRoomMap.set(socket.id, {
       socketId: socket.id,
       userId: userId || socket.id,
@@ -83,7 +111,7 @@ const syncHandler = (io, socket) => {
       userRole: userRole || 'student'
     });
 
-    console.log(`👤 User ${userId || socket.id} (${userName || userRole}) joined Room: ${roomId}`);
+    console.log(`👤 User ${userId || socket.id} (${userName || userRole}) joined Room: ${roomId} (new: ${isNewToRoom})`);
     
     // Persist Room and Session Participants directly to MongoDB
     (async () => {
@@ -138,19 +166,50 @@ const syncHandler = (io, socket) => {
       }
     })();
 
-    // Notify peers for WebRTC (always use socket.id)
-    variants.forEach(v => socket.to(v).emit('user-connected', socket.id));
+    // Mark socket as admitted
+    if (userRole === 'instructor' || admittedSockets.has(socket.id)) {
+      admittedSockets.add(socket.id);
+    }
+
+    // Notify peers for WebRTC ONLY if this socket is newly joining (prevents duplicate peer negotiation loops)
+    if (isNewToRoom) {
+      socket.to(roomId).emit('user-connected', socket.id);
+    }
 
     if (userRole === 'instructor') {
       const instName = userName || 'Instructor';
       variants.forEach(v => roomInstructors.set(v, instName));
+
+      // Resolve room passcode and sync to instructor
+      let curPasscode = roomPasscodes.get(roomId);
+      if (!curPasscode) {
+        Room.findOne({ roomId }).lean().then(r => {
+          if (r && r.passcode) {
+            curPasscode = r.passcode;
+          } else {
+            curPasscode = generatePasscode();
+            Room.findOneAndUpdate({ roomId }, { $set: { passcode: curPasscode } }).catch(() => {});
+          }
+          roomPasscodes.set(roomId, curPasscode);
+          variants.forEach(v => roomPasscodes.set(v, curPasscode));
+          socket.emit('room-passcode', { passcode: curPasscode });
+        }).catch(() => {
+          curPasscode = generatePasscode();
+          roomPasscodes.set(roomId, curPasscode);
+          variants.forEach(v => roomPasscodes.set(v, curPasscode));
+          socket.emit('room-passcode', { passcode: curPasscode });
+        });
+      } else {
+        socket.emit('room-passcode', { passcode: curPasscode });
+      }
     }
 
-    // Broadcast updated participant roster to all variants and to current socket
+    // Broadcast updated participant roster to the room and to current socket
     const participantList = Array.from(currentRoomMap.values());
-    variants.forEach(v => io.to(v).emit('room-participants-update', participantList));
-    socket.emit('room-participants-update', participantList);
+    io.to(roomId).emit('room-participants-update', participantList);
     socket.emit('room-lock-status', { isLocked: lockedRooms.has(roomId) });
+    socket.emit('chat-lock-status', { isLocked: roomLockedChats.has(roomId) });
+    socket.emit('whiteboard-student-draw-status', { allowed: roomStudentDrawingAllowed.has(roomId) });
 
     // Send existing media states of participants
     let foundStates = null;
@@ -180,13 +239,11 @@ const syncHandler = (io, socket) => {
       socket.emit('room-instructor-info', { instructorName: curInst });
     }
 
-    // Broadcast user joined toast notification to all peers in the room variants
-    variants.forEach(v => {
-      socket.to(v).emit('peer-joined-notification', {
-        userName: userName || (userRole === 'instructor' ? 'Instructor' : 'A student'),
-        userRole: userRole || 'student',
-        totalCount: currentRoomMap.size
-      });
+    // Broadcast user joined toast notification once to peers in the room
+    socket.to(roomId).emit('peer-joined-notification', {
+      userName: userName || (userRole === 'instructor' ? 'Instructor' : 'A student'),
+      userRole: userRole || 'student',
+      totalCount: currentRoomMap.size
     });
 
     // Send existing workspace view & video state to newly joined user
@@ -208,6 +265,186 @@ const syncHandler = (io, socket) => {
     if (currentTopic) {
       socket.emit('room-topic-sync', { topic: currentTopic });
     }
+  });
+
+  // ── Secure Token / Passcode Verification (Instant Access for Authorized Students) ──
+  socket.on('verify-room-passcode', async ({ roomId: rawRoomId, passcode, userName, userRole }) => {
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId);
+    const roomId = canonicalRoomId || sanitizeRoomId(rawRoomId);
+    socket.roomId = roomId;
+
+    if (userRole === 'instructor') {
+      admittedSockets.add(socket.id);
+      let curPasscode = roomPasscodes.get(roomId);
+      if (!curPasscode) {
+        try {
+          const r = await Room.findOne({ roomId }).lean();
+          if (r && r.passcode) curPasscode = r.passcode;
+        } catch (e) {}
+      }
+      if (!curPasscode) {
+        curPasscode = generatePasscode();
+        roomPasscodes.set(roomId, curPasscode);
+        try {
+          await Room.findOneAndUpdate({ roomId }, { $set: { passcode: curPasscode } });
+        } catch (e) {}
+      }
+      socket.emit('admission-granted', { roomId, passcode: curPasscode });
+      return;
+    }
+
+    // Room locked check
+    if (lockedRooms.has(roomId)) {
+      socket.emit('admission-denied', { message: 'This room has been locked by the instructor.' });
+      return;
+    }
+
+    // Get room passcode
+    let targetPasscode = roomPasscodes.get(roomId);
+    if (!targetPasscode) {
+      try {
+        const r = await Room.findOne({ roomId }).lean();
+        if (r && r.passcode) {
+          targetPasscode = r.passcode;
+          roomPasscodes.set(roomId, targetPasscode);
+        }
+      } catch (e) {}
+    }
+
+    const entered = (passcode || '').trim().toLowerCase();
+    const real = (targetPasscode || '').trim().toLowerCase();
+
+    // Authorized if entered passcode matches or if room has no passcode configured yet
+    const isAuthorized = targetPasscode ? (entered === real) : Boolean(entered);
+
+    if (isAuthorized) {
+      admittedSockets.add(socket.id);
+      socket.emit('admission-granted', { roomId });
+      console.log(`✅ Instant Access: Authorized student "${userName || socket.id}" entered room ${roomId}`);
+    } else {
+      socket.emit('admission-denied', {
+        message: 'Invalid class passcode. Unauthorized access denied.'
+      });
+      console.warn(`🚨 SECURITY ALERT: Unauthorized access attempt in ${roomId} by "${userName}" (${socket.id}) with code: "${passcode}"`);
+
+      // Drop silent security alert to Instructor Dashboard
+      const instSockets = getInstructorSockets(roomId);
+      instSockets.forEach(sId => {
+        io.to(sId).emit('security-alert', {
+          type: 'unauthorized_attempt',
+          userName: userName || 'Unknown Student',
+          socketId: socket.id,
+          attemptedPasscode: passcode || '(empty)',
+          timestamp: Date.now(),
+          message: `Unauthorized access attempt by "${userName || 'Unknown Student'}" was blocked (Invalid Passcode).`
+        });
+      });
+    }
+  });
+
+  // ── Student Admission Waiting Room (Security & Real-time Instructor Permission) ──
+  socket.on('request-admission', ({ roomId: rawRoomId, userId, userName, userRole, photo }) => {
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId);
+    const roomId = canonicalRoomId || sanitizeRoomId(rawRoomId);
+    socket.roomId = roomId;
+
+    // Instructors bypass the waiting room directly
+    if (userRole === 'instructor' || admittedSockets.has(socket.id)) {
+      admittedSockets.add(socket.id);
+      socket.emit('admission-granted', { roomId });
+      return;
+    }
+
+    // If room is locked, inform immediately
+    if (lockedRooms.has(roomId)) {
+      socket.emit('room-locked-error', { message: 'This room has been locked by the instructor.' });
+      return;
+    }
+
+    if (!pendingAdmissions.has(roomId)) {
+      pendingAdmissions.set(roomId, new Map());
+    }
+
+    const studentData = {
+      socketId: socket.id,
+      userId: userId || socket.id,
+      userName: (userName || 'Student').trim(),
+      userRole: userRole || 'student',
+      photo: photo || null,
+      timestamp: Date.now()
+    };
+
+    pendingAdmissions.get(roomId).set(socket.id, studentData);
+    socket.emit('admission-pending', {
+      roomId,
+      message: 'Waiting for the instructor to admit you...'
+    });
+
+    const pendingList = Array.from(pendingAdmissions.get(roomId).values());
+    const instSockets = getInstructorSockets(roomId);
+    instSockets.forEach(instSocketId => {
+      io.to(instSocketId).emit('admission-request', {
+        student: studentData,
+        pendingList
+      });
+      io.to(instSocketId).emit('pending-admissions-list', pendingList);
+    });
+
+    console.log(`⏳ Student "${studentData.userName}" (${socket.id}) requested admission in room: ${roomId}`);
+  });
+
+  socket.on('admit-student', ({ roomId: rawRoomId, targetSocketId }) => {
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId);
+    const roomId = canonicalRoomId || socket.roomId;
+    if (pendingAdmissions.has(roomId)) {
+      pendingAdmissions.get(roomId).delete(targetSocketId);
+    }
+    admittedSockets.add(targetSocketId);
+    io.to(targetSocketId).emit('admission-granted', { roomId });
+
+    const pendingList = pendingAdmissions.has(roomId) ? Array.from(pendingAdmissions.get(roomId).values()) : [];
+    const instSockets = getInstructorSockets(roomId);
+    instSockets.forEach(sId => io.to(sId).emit('pending-admissions-list', pendingList));
+    console.log(`✅ Admitted student ${targetSocketId} into room: ${roomId}`);
+  });
+
+  socket.on('deny-student', ({ roomId: rawRoomId, targetSocketId }) => {
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId);
+    const roomId = canonicalRoomId || socket.roomId;
+    if (pendingAdmissions.has(roomId)) {
+      pendingAdmissions.get(roomId).delete(targetSocketId);
+    }
+    io.to(targetSocketId).emit('admission-denied', {
+      message: 'The instructor did not allow you to enter this class.'
+    });
+
+    const pendingList = pendingAdmissions.has(roomId) ? Array.from(pendingAdmissions.get(roomId).values()) : [];
+    const instSockets = getInstructorSockets(roomId);
+    instSockets.forEach(sId => io.to(sId).emit('pending-admissions-list', pendingList));
+    console.log(`❌ Denied admission for student ${targetSocketId} in room: ${roomId}`);
+  });
+
+  socket.on('admit-all-students', ({ roomId: rawRoomId }) => {
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId);
+    const roomId = canonicalRoomId || socket.roomId;
+    if (pendingAdmissions.has(roomId)) {
+      const pendingMap = pendingAdmissions.get(roomId);
+      for (const [sId] of pendingMap.entries()) {
+        admittedSockets.add(sId);
+        io.to(sId).emit('admission-granted', { roomId });
+      }
+      pendingMap.clear();
+    }
+    const instSockets = getInstructorSockets(roomId);
+    instSockets.forEach(sId => io.to(sId).emit('pending-admissions-list', []));
+    console.log(`✅ Admitted all pending students in room: ${roomId}`);
+  });
+
+  socket.on('get-pending-admissions', ({ roomId: rawRoomId }) => {
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId);
+    const roomId = canonicalRoomId || socket.roomId;
+    const pendingList = pendingAdmissions.has(roomId) ? Array.from(pendingAdmissions.get(roomId).values()) : [];
+    socket.emit('pending-admissions-list', pendingList);
   });
 
   // ── Host Controls: Mute All ──
@@ -300,12 +537,45 @@ const syncHandler = (io, socket) => {
 
 
 
+  // ── Host Controls: Lock / Unlock Student Chat ──
+  socket.on('toggle-chat-lock', ({ roomId: rawRoomId, isLocked }) => {
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId) || sanitizeRoomId(rawRoomId);
+    const variants = getRoomVariants(rawRoomId);
+    if (isLocked) {
+      variants.forEach(v => roomLockedChats.add(v));
+    } else {
+      variants.forEach(v => roomLockedChats.delete(v));
+    }
+    console.log(`💬 Chat lock status in ${canonicalRoomId}: ${isLocked}`);
+    variants.forEach(v => io.to(v).emit('chat-lock-status', { isLocked: Boolean(isLocked) }));
+  });
+
+  // ── Host Controls: Toggle Student Whiteboard Drawing ──
+  socket.on('toggle-whiteboard-student-draw', ({ roomId: rawRoomId, allowed }) => {
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId) || sanitizeRoomId(rawRoomId);
+    const variants = getRoomVariants(rawRoomId);
+    if (allowed) {
+      variants.forEach(v => roomStudentDrawingAllowed.add(v));
+    } else {
+      variants.forEach(v => roomStudentDrawingAllowed.delete(v));
+    }
+    console.log(`🎨 Student drawing permission in ${canonicalRoomId}: ${allowed}`);
+    variants.forEach(v => io.to(v).emit('whiteboard-student-draw-status', { allowed: Boolean(allowed) }));
+  });
+
   // ── Live Chat ──
   socket.on('send-message', (data) => {
-    const targetRoom = sanitizeRoomId(data?.roomId) || socket.roomId;
+    const rawTarget = data?.roomId || socket.roomId;
+    const targetRoom = getCanonicalRoomId(rawTarget) || sanitizeRoomId(rawTarget);
     if (!targetRoom) return;
+
+    // Check if chat is locked for students
+    if (data.senderRole !== 'instructor' && (roomLockedChats.has(targetRoom) || roomLockedChats.has(rawTarget))) {
+      socket.emit('chat-error', { message: 'Chat has been locked by the teacher.' });
+      return;
+    }
     const msgPayload = {
-      id: data.id || ('msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4)),
+      id: data.id || ('msg_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)),
       roomId: targetRoom,
       message: data.message,
       senderId: data.senderId || socket.id,
@@ -320,47 +590,34 @@ const syncHandler = (io, socket) => {
       file: data.file || null,
       time: data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
+    // Emit exactly once to the target room
     io.to(targetRoom).emit('receive-message', msgPayload);
-    const altRoom = targetRoom.replace(/-/g, '');
-    if (altRoom && altRoom !== targetRoom) {
-      io.to(altRoom).emit('receive-message', msgPayload);
-    }
   });
 
   // ── Pinned Doubts System ──
   socket.on('pin-doubt', (data) => {
-    const targetRoom = sanitizeRoomId(data?.roomId) || socket.roomId;
+    const rawTarget = data?.roomId || socket.roomId;
+    const targetRoom = getCanonicalRoomId(rawTarget) || sanitizeRoomId(rawTarget);
     console.log(`📌 [pin-doubt] Received in room "${targetRoom}":`, data?.doubt?.text);
     if (targetRoom) {
       io.to(targetRoom).emit('doubt-pinned', data.doubt);
-      const altRoom = targetRoom.replace(/-/g, '');
-      if (altRoom && altRoom !== targetRoom) {
-        io.to(altRoom).emit('doubt-pinned', data.doubt);
-      }
     }
-    // Also emit back to the sender directly to guarantee instant confirmation
-    socket.emit('doubt-pinned', data.doubt);
   });
 
   socket.on('resolve-doubt', (data) => {
-    const targetRoom = sanitizeRoomId(data?.roomId) || socket.roomId;
+    const rawTarget = data?.roomId || socket.roomId;
+    const targetRoom = getCanonicalRoomId(rawTarget) || sanitizeRoomId(rawTarget);
     console.log(`✅ [resolve-doubt] Received in room "${targetRoom}" for doubt:`, data?.doubtId);
     if (targetRoom) {
       io.to(targetRoom).emit('doubt-resolved', { doubtId: data.doubtId });
-      const altRoom = targetRoom.replace(/-/g, '');
-      if (altRoom && altRoom !== targetRoom) {
-        io.to(altRoom).emit('doubt-resolved', { doubtId: data.doubtId });
-      }
     }
-    socket.emit('doubt-resolved', { doubtId: data.doubtId });
   });
 
   socket.on('seek-to-video-time', (data) => {
-    const targetRoom = sanitizeRoomId(data?.roomId) || socket.roomId;
-    io.to(targetRoom).emit('seek-to-video-time', data);
-    const altRoom = targetRoom.replace(/-/g, '');
-    if (altRoom && altRoom !== targetRoom) {
-      io.to(altRoom).emit('seek-to-video-time', data);
+    const rawTarget = data?.roomId || socket.roomId;
+    const targetRoom = getCanonicalRoomId(rawTarget) || sanitizeRoomId(rawTarget);
+    if (targetRoom) {
+      io.to(targetRoom).emit('seek-to-video-time', data);
     }
   });
 
@@ -570,6 +827,14 @@ const syncHandler = (io, socket) => {
   });
 
   // ── WebRTC Signaling ──
+  socket.on('webrtc-peer-state', (data) => {
+    console.log(`📡 [WebRTC State] from ${socket.id} (${socket.roomId || 'no-room'}):`, data);
+  });
+
+  socket.on('webrtc-peer-error', (data) => {
+    console.warn(`🚨 [WebRTC Error] from ${socket.id} (${socket.roomId || 'no-room'}):`, data);
+  });
+
   socket.on('sending-signal', (payload) => {
     console.log(`📡 Signal (Offer) from ${payload.callerID} to ${payload.userToSignal}`);
     io.to(payload.userToSignal).emit('user-joined', {
@@ -605,9 +870,22 @@ const syncHandler = (io, socket) => {
   socket.on('disconnect', () => {
     console.log('❌ User Disconnected:', socket.id);
     if (socket.roomId) {
-      const canonicalRoomId = getCanonicalRoomId(socket.roomId);
-      const variants = getRoomVariants(socket.roomId);
-      variants.forEach(v => socket.to(v).emit('user-disconnected', socket.id));
+      const canonicalRoomId = getCanonicalRoomId(socket.roomId) || sanitizeRoomId(socket.roomId);
+      
+      // Notify peers once in the canonical room
+      socket.to(canonicalRoomId).emit('user-disconnected', socket.id);
+
+      // Clean up from pending waiting room if user was waiting
+      if (pendingAdmissions.has(canonicalRoomId)) {
+        const pMap = pendingAdmissions.get(canonicalRoomId);
+        if (pMap.has(socket.id)) {
+          pMap.delete(socket.id);
+          const pendingList = Array.from(pMap.values());
+          const instSockets = getInstructorSockets(canonicalRoomId);
+          instSockets.forEach(sId => io.to(sId).emit('pending-admissions-list', pendingList));
+        }
+      }
+      admittedSockets.delete(socket.id);
 
       if (roomUsers.has(canonicalRoomId)) {
         const currentRoomMap = roomUsers.get(canonicalRoomId);
@@ -618,9 +896,10 @@ const syncHandler = (io, socket) => {
           roomUsers.delete(canonicalRoomId);
           lockedRooms.delete(canonicalRoomId);
           roomMediaStates.delete(canonicalRoomId);
+          pendingAdmissions.delete(canonicalRoomId);
         } else {
           const participantList = Array.from(currentRoomMap.values());
-          variants.forEach(v => io.to(v).emit('room-participants-update', participantList));
+          io.to(canonicalRoomId).emit('room-participants-update', participantList);
         }
 
         if (roomMediaStates.has(canonicalRoomId)) {
