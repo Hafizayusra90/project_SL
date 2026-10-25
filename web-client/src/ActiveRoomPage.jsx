@@ -101,39 +101,32 @@ const RemoteVideo = ({ peer, peerInfo, mediaState, isHandRaised = false }) => {
       }
     }
 
-    // 5. Attach Live Audio Track to dedicated <audio> element
+    // 5. Attach Live Audio Track to dedicated <audio> element (strictly enforce remote mute)
     if (audioTrack && audioRef.current) {
-      audioTrack.enabled = true;
-      if (!audioTrack.muted) {
-        setAudioBlocked(false);
-      }
-      audioTrack.onunmute = () => {
-        if (audioRef.current) {
-          audioRef.current.muted = false;
-          audioRef.current.play().then(() => setAudioBlocked(false)).catch(() => {});
-        }
-      };
+      const isPeerMuted = (mediaState && mediaState.micOn === false);
+      audioTrack.enabled = !isPeerMuted;
       if (currentAudioTrackIdRef.current !== audioTrack.id || !audioRef.current.srcObject) {
         currentAudioTrackIdRef.current = audioTrack.id;
         const aStream = new MediaStream([audioTrack]);
         audioRef.current.srcObject = aStream;
       }
-      audioRef.current.muted = false;
-      audioRef.current.volume = Math.max(0, Math.min(1, peerVolume / 100));
-
-      try {
-        const prefSpeaker = localStorage.getItem('synclearn_preferred_speaker');
-        if (prefSpeaker && prefSpeaker !== 'default' && typeof audioRef.current.setSinkId === 'function') {
-          audioRef.current.setSinkId(prefSpeaker).catch(() => {});
+      if (isPeerMuted) {
+        audioRef.current.muted = true;
+        audioRef.current.volume = 0;
+        audioRef.current.pause();
+      } else {
+        audioRef.current.muted = false;
+        audioRef.current.volume = Math.max(0, Math.min(1, peerVolume / 100));
+        try {
+          const prefSpeaker = localStorage.getItem('synclearn_preferred_speaker');
+          if (prefSpeaker && prefSpeaker !== 'default' && typeof audioRef.current.setSinkId === 'function') {
+            audioRef.current.setSinkId(prefSpeaker).catch(() => {});
+          }
+        } catch (e) {}
+        const ap = audioRef.current.play();
+        if (ap !== undefined) {
+          ap.then(() => setAudioBlocked(false)).catch(() => {});
         }
-      } catch (e) {}
-
-      const ap = audioRef.current.play();
-      if (ap !== undefined) {
-        ap.then(() => setAudioBlocked(false)).catch(err => {
-          console.warn('Audio play notice (waiting for user tap):', err);
-          setAudioBlocked(true);
-        });
       }
     }
 
@@ -220,13 +213,21 @@ const RemoteVideo = ({ peer, peerInfo, mediaState, isHandRaised = false }) => {
     };
   }, [peer]);
 
-  // Adjust volume dynamically
+  // Adjust volume & mute state dynamically
   useEffect(() => {
     const vol = Math.max(0, Math.min(1, peerVolume / 100));
     if (audioRef.current) {
-      audioRef.current.volume = vol;
+      if (mediaState && mediaState.micOn === false) {
+        audioRef.current.muted = true;
+        audioRef.current.volume = 0;
+        audioRef.current.pause();
+      } else {
+        audioRef.current.muted = false;
+        audioRef.current.volume = vol;
+        audioRef.current.play().catch(() => {});
+      }
     }
-  }, [peerVolume]);
+  }, [peerVolume, mediaState?.micOn]);
 
   // If mediaState is received from socket use it; otherwise fallback to whether stream actually has live track
   const isVideoOn = mediaState !== undefined ? Boolean(mediaState?.videoOn) : streamTracks.hasVideo;
@@ -1227,6 +1228,7 @@ function ActiveRoomPage({
 
   const footerRef = useRef(null);
   const headerActionsRef = useRef(null);
+  const meetingInfoRef = useRef(null);
 
   // Enumerate actual media devices if available in browser
   useEffect(() => {
@@ -1275,7 +1277,9 @@ function ActiveRoomPage({
   // Close popup menus on outside click
   useEffect(() => {
     const handleOutsideClick = (e) => {
-      if (footerRef.current && !footerRef.current.contains(e.target)) {
+      const isInsideFooter = footerRef.current && footerRef.current.contains(e.target);
+      const isInsideMeetingInfo = meetingInfoRef.current && meetingInfoRef.current.contains(e.target);
+      if (!isInsideFooter && !isInsideMeetingInfo) {
         setIsAudioMenuOpen(false);
         setIsVideoMenuOpen(false);
         setIsParticipantsMenuOpen(false);
@@ -1284,7 +1288,11 @@ function ActiveRoomPage({
       }
     };
     document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('touchstart', handleOutsideClick, { passive: true });
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('touchstart', handleOutsideClick);
+    };
   }, []);
 
   const handleSwitchMicrophone = async (newMicId) => {
@@ -1810,8 +1818,18 @@ function ActiveRoomPage({
       if (!isInstructor) {
         setIsMutedByHost(true);
         setMicOn(false);
-        const audioTrack = userStreamRef.current?.getAudioTracks()[0];
-        if (audioTrack) audioTrack.enabled = false;
+        if (userStreamRef.current) {
+          userStreamRef.current.getAudioTracks().forEach(t => { t.enabled = false; });
+        }
+        peersRef.current.forEach(p => {
+          try {
+            const pc = p.peer?._pc;
+            if (pc) {
+              const sender = findAudioSender(pc);
+              if (sender && sender.track) sender.track.enabled = false;
+            }
+          } catch(e) {}
+        });
         socket.emit('media-state-change', { roomId: cleanRoom, videoOn, micOn: false });
         showToast('🔇 You have been muted by the instructor (Microphone locked)', 'error');
       }
@@ -2949,11 +2967,23 @@ function ActiveRoomPage({
         return;
       }
     } else {
-      // User turns mic OFF
-      const track = userStreamRef.current?.getAudioTracks()[0];
-      if (track) {
-        track.enabled = false;
+      // User turns mic OFF - strictly disable all audio tracks and WebRTC senders
+      if (userStreamRef.current) {
+        userStreamRef.current.getAudioTracks().forEach(t => {
+          t.enabled = false;
+        });
       }
+      peersRef.current.forEach(p => {
+        try {
+          const pc = p.peer?._pc;
+          if (pc) {
+            const sender = findAudioSender(pc);
+            if (sender && sender.track) {
+              sender.track.enabled = false;
+            }
+          }
+        } catch (e) {}
+      });
       setMicOn(false);
       socket.emit('media-state-change', { roomId: cleanRoomId(roomId), videoOn, micOn: false });
       showToast('🔇 Microphone muted');
@@ -3273,7 +3303,7 @@ function ActiveRoomPage({
   };
 
   return (
-    <div className="room-container">
+    <div className="room-container" data-theme={theme}>
       {/* ── Floating Toast Notification ── */}
       {toast.show && (
         <div className={`synclearn-toast ${toast.type === 'error' ? 'toast-error' : ''}`}>
@@ -4066,9 +4096,24 @@ function ActiveRoomPage({
                     type="button"
                     className={`panel-win-btn ${panelSizeMode === 'maximized' ? 'active' : ''}`}
                     onClick={() => setPanelSizeMode(prev => prev === 'maximized' ? 'normal' : 'maximized')}
-                    title={panelSizeMode === 'maximized' ? "Restore Normal Size" : "Maximize Panel (🗖)"}
+                    title={panelSizeMode === 'maximized' ? "Restore Normal Size" : "Maximize Panel"}
+                    aria-label="Toggle panel size"
                   >
-                    {panelSizeMode === 'maximized' ? '🗗' : '🗖'}
+                    {panelSizeMode === 'maximized' ? (
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="4 14 10 14 10 20"></polyline>
+                        <polyline points="20 10 14 10 14 4"></polyline>
+                        <line x1="14" y1="10" x2="21" y2="3"></line>
+                        <line x1="3" y1="21" x2="10" y2="14"></line>
+                      </svg>
+                    ) : (
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="15 3 21 3 21 9"></polyline>
+                        <polyline points="9 21 3 21 3 15"></polyline>
+                        <line x1="21" y1="3" x2="14" y2="10"></line>
+                        <line x1="3" y1="21" x2="10" y2="14"></line>
+                      </svg>
+                    )}
                   </button>
                   <button
                     type="button"
@@ -5350,9 +5395,13 @@ function ActiveRoomPage({
               <span className="zoom-btn-label">Meeting Info</span>
             </button>
 
-            {/* Meeting Info Flyout Card (Upward & Compact) */}
+          </div>
+        </div>
+      </footer>
+
+      {/* Meeting Info Flyout Card (Rendered outside footer to prevent mobile containment/clipping) */}
             {isMeetingInfoOpen && (
-              <div className="zoom-meeting-info-flyout footer-flyout" onClick={e => e.stopPropagation()}>
+              <div className="zoom-meeting-info-flyout footer-flyout" ref={meetingInfoRef} onClick={e => e.stopPropagation()}>
                 <div className="zoom-flyout-header">
                   <div className="zoom-info-title-wrap">
                     <div className="zoom-info-meeting-title" style={{ fontSize: '1rem', fontWeight: 800, color: theme === 'light' ? '#0f172a' : '#f8fafc', lineHeight: 1.2 }}>SyncLearn Meeting</div>
@@ -5485,9 +5534,6 @@ function ActiveRoomPage({
                 )}
               </div>
             )}
-          </div>
-        </div>
-      </footer>
 
       {/* ── Instructor Leave Confirmation Modal ── */}
       {isLeaveModalOpen && (

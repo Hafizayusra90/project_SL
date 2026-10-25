@@ -82,7 +82,11 @@
   transform: translateY(-3px);
   box-shadow: 0 16px 40px rgba(8, 145, 178, 0.2), 0 0 30px rgba(6, 182, 212, 0.2);
 }
-.action-card h2 { font-size: 1.25rem !important; font-weight: 800 !important; color: #042f2e !important; }
+.action-card h2 { font-size: 1.25rem !important; font-weight: 800 !important; color: #f8fafc; }
+[data-theme="light"] .action-card h2 { color: #042f2e !important; }
+[data-theme="dark"] .action-card h2 { color: #ffffff !important; }
+[data-theme="light"] .action-card p  { color: #0e4252 !important; }
+[data-theme="dark"] .action-card p  { color: #c2f0f2 !important; }
 .action-card p  { font-size: 0.9rem; color: #0e4252; line-height: 1.6; }
 
 .card-badge {
@@ -1225,4 +1229,279 @@
     width: 100%;
     justify-content: center;
   }
+}
+
+
+/* =========================================================================
+   COMPREHENSIVE DASHBOARD THEME REFINEMENTS (DARK & LIGHT MODE CONTRAST)
+   ========================================================================= */
+
+/* 1. Welcome Banners */
+.role-welcome-banner h2 {
+  font-size: 1.35rem !important;
+  font-weight: 800 !important;
+  margin-bottom: 0.35rem !important;
+  color: #ffffff !important;
+}
+[data-theme="light"] .role-welcome-banner h2 {
+  color: #0f172a !important;
+}
+
+.role-welcome-banner p {
+  font-size: 0.9rem !important;
+  color: #cbd5e1 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+  flex-wrap: wrap !important;
+}
+[data-theme="light"] .role-welcome-banner p {
+  color: #334155 !important;
+}
+
+[data-theme="dark"] .instructor-banner {
+  background: linear-gradient(135deg, rgba(2, 132, 199, 0.25) 0%, rgba(14, 165, 233, 0.12) 100%) !important;
+  border: 1px solid rgba(56, 189, 248, 0.5) !important;
+  box-shadow: 0 8px 30px rgba(2, 132, 199, 0.25) !important;
+}
+[data-theme="light"] .instructor-banner {
+  background: linear-gradient(135deg, rgba(2, 132, 199, 0.12) 0%, rgba(14, 165, 233, 0.06) 100%) !important;
+  border: 1px solid rgba(2, 132, 199, 0.35) !important;
+  box-shadow: 0 4px 20px rgba(2, 132, 199, 0.1) !important;
+}
+
+[data-theme="dark"] .student-banner {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(14, 165, 233, 0.1) 100%) !important;
+  border: 1px solid rgba(52, 211, 153, 0.5) !important;
+  box-shadow: 0 8px 30px rgba(16, 185, 129, 0.25) !important;
+}
+[data-theme="light"] .student-banner {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12) 0%, rgba(14, 165, 233, 0.05) 100%) !important;
+  border: 1px solid rgba(16, 185, 129, 0.35) !important;
+  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.1) !important;
+}
+
+/* 2. Role Chips */
+.role-instructor {
+  background: rgba(14, 165, 233, 0.25) !important;
+  color: #38bdf8 !important;
+  border: 1px solid rgba(56, 189, 248, 0.5) !important;
+}
+.role-student {
+  background: rgba(16, 185, 129, 0.25) !important;
+  color: #34d399 !important;
+  border: 1px solid rgba(52, 211, 153, 0.5) !important;
+}
+[data-theme="light"] .role-instructor {
+  background: rgba(2, 132, 199, 0.15) !important;
+  color: #0284c7 !important;
+  border: 1px solid rgba(2, 132, 199, 0.4) !important;
+}
+[data-theme="light"] .role-student {
+  background: rgba(16, 185, 129, 0.15) !important;
+  color: #059669 !important;
+  border: 1px solid rgba(16, 185, 129, 0.4) !important;
+}
+
+/* 3. Section Titles */
+.role-section-title {
+  font-size: 0.85rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  color: #7dd3fc !important;
+}
+[data-theme="light"] .role-section-title {
+  color: #0369a1 !important;
+}
+
+/* 4. Action Cards & Classroom Hub Cards */
+[data-theme="dark"] .action-card,
+[data-theme="dark"] .zoom-class-card {
+  background: rgba(15, 23, 42, 0.8) !important;
+  border: 1.5px solid rgba(56, 189, 248, 0.25) !important;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45) !important;
+}
+[data-theme="light"] .action-card,
+[data-theme="light"] .zoom-class-card {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border: 1.5px solid rgba(8, 145, 178, 0.25) !important;
+  box-shadow: 0 10px 30px rgba(8, 145, 178, 0.1) !important;
+}
+[data-theme="dark"] .student-card {
+  border-color: rgba(34, 197, 94, 0.35) !important;
+}
+[data-theme="light"] .student-card {
+  border-color: rgba(16, 185, 129, 0.35) !important;
+}
+
+[data-theme="dark"] .zoom-card-heading-wrap h2,
+[data-theme="dark"] .action-card h2 {
+  color: #f8fafc !important;
+}
+[data-theme="light"] .zoom-card-heading-wrap h2,
+[data-theme="light"] .action-card h2 {
+  color: #0f172a !important;
+}
+
+[data-theme="dark"] .zoom-card-heading-wrap p,
+[data-theme="dark"] .action-card p {
+  color: #94a3b8 !important;
+}
+[data-theme="light"] .zoom-card-heading-wrap p,
+[data-theme="light"] .action-card p {
+  color: #334155 !important;
+}
+
+/* 5. Labels & Input Fields */
+.room-code-label {
+  font-size: 0.8rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+  color: #38bdf8 !important;
+}
+[data-theme="light"] .room-code-label {
+  color: #0284c7 !important;
+}
+
+.dash-input.topic-input {
+  font-size: 0.95rem !important;
+  font-weight: 600 !important;
+  background: rgba(15, 23, 42, 0.9) !important;
+  border: 1.5px solid rgba(56, 189, 248, 0.3) !important;
+  border-radius: 8px !important;
+  padding: 0.75rem 1rem !important;
+  color: #ffffff !important;
+}
+.dash-input.topic-input::placeholder {
+  color: #64748b !important;
+}
+.dash-input.topic-input:focus {
+  border-color: #38bdf8 !important;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25) !important;
+}
+[data-theme="light"] .dash-input.topic-input {
+  background: #ffffff !important;
+  border: 1.5px solid rgba(8, 145, 178, 0.35) !important;
+  color: #0f172a !important;
+}
+[data-theme="light"] .dash-input.topic-input::placeholder {
+  color: #94a3b8 !important;
+}
+[data-theme="light"] .dash-input.topic-input:focus {
+  border-color: #0284c7 !important;
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.2) !important;
+}
+
+.dash-input.zoom-code-input {
+  font-size: 1.05rem !important;
+  font-weight: 700 !important;
+  color: #38bdf8 !important;
+  background: rgba(15, 23, 42, 0.9) !important;
+  border: 1.5px solid rgba(56, 189, 248, 0.3) !important;
+  border-radius: 8px !important;
+  padding: 0.75rem 1rem 0.75rem 2.2rem !important;
+}
+.dash-input.zoom-code-input::placeholder {
+  color: #64748b !important;
+}
+.dash-input.zoom-code-input:focus {
+  border-color: #38bdf8 !important;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.25) !important;
+}
+[data-theme="light"] .dash-input.zoom-code-input {
+  background: #ffffff !important;
+  border: 1.5px solid rgba(8, 145, 178, 0.35) !important;
+  color: #0369a1 !important;
+}
+[data-theme="light"] .dash-input.zoom-code-input::placeholder {
+  color: #94a3b8 !important;
+}
+[data-theme="light"] .dash-input.zoom-code-input:focus {
+  border-color: #0284c7 !important;
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.2) !important;
+}
+
+/* 6. Code Action Buttons */
+.code-action-btn {
+  background: rgba(15, 23, 42, 0.85) !important;
+  border: 1px solid rgba(56, 189, 248, 0.35) !important;
+  color: #38bdf8 !important;
+  font-weight: 600 !important;
+}
+.code-action-btn:hover {
+  background: rgba(56, 189, 248, 0.2) !important;
+  border-color: #38bdf8 !important;
+  color: #ffffff !important;
+}
+[data-theme="light"] .code-action-btn {
+  background: rgba(240, 253, 254, 0.95) !important;
+  border: 1px solid rgba(8, 145, 178, 0.35) !important;
+  color: #0369a1 !important;
+}
+[data-theme="light"] .code-action-btn:hover {
+  background: #0891b2 !important;
+  border-color: #0891b2 !important;
+  color: #ffffff !important;
+}
+
+/* 7. Class Information Preview Box */
+.meeting-details-preview {
+  margin-top: 1.1rem !important;
+  padding: 1.15rem 1.35rem !important;
+  border-radius: 12px !important;
+  background: rgba(15, 23, 42, 0.75) !important;
+  border: 1.5px solid rgba(56, 189, 248, 0.3) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.6rem !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25) !important;
+}
+[data-theme="light"] .meeting-details-preview {
+  background: rgba(240, 253, 254, 0.92) !important;
+  border: 1.5px solid rgba(8, 145, 178, 0.3) !important;
+  box-shadow: 0 4px 16px rgba(8, 145, 178, 0.08) !important;
+}
+.meeting-details-preview h3 {
+  font-size: 1.05rem !important;
+  font-weight: 800 !important;
+  color: #38bdf8 !important;
+  margin: 0 0 0.2rem 0 !important;
+}
+[data-theme="light"] .meeting-details-preview h3 {
+  color: #0369a1 !important;
+}
+.meeting-details-preview p {
+  margin: 0 !important;
+  font-size: 0.92rem !important;
+  color: #e2e8f0 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.5rem !important;
+  flex-wrap: wrap !important;
+}
+[data-theme="light"] .meeting-details-preview p {
+  color: #1e293b !important;
+}
+.meeting-details-preview strong {
+  color: #94a3b8 !important;
+  font-weight: 700 !important;
+}
+[data-theme="light"] .meeting-details-preview strong {
+  color: #475569 !important;
+}
+.meeting-details-preview code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  color: #38bdf8 !important;
+  font-weight: 800 !important;
+  background: rgba(56, 189, 248, 0.12) !important;
+  padding: 2px 8px !important;
+  border-radius: 4px !important;
+  border: 1px solid rgba(56, 189, 248, 0.25) !important;
+}
+[data-theme="light"] .meeting-details-preview code {
+  color: #0284c7 !important;
+  background: rgba(2, 132, 199, 0.1) !important;
+  border-color: rgba(2, 132, 199, 0.25) !important;
 }

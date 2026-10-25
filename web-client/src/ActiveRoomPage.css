@@ -1292,6 +1292,22 @@
   border-color: #ef4444;
 }
 
+[data-theme="light"] .panel-win-btn {
+  background: rgba(240, 253, 254, 0.95) !important;
+  border: 1px solid rgba(8, 145, 178, 0.35) !important;
+  color: #0369a1 !important;
+}
+[data-theme="light"] .panel-win-btn:hover {
+  background: rgba(8, 145, 178, 0.18) !important;
+  color: #0284c7 !important;
+  border-color: #0284c7 !important;
+}
+[data-theme="light"] .panel-win-btn.panel-close-btn:hover {
+  background: rgba(239, 68, 68, 0.18) !important;
+  color: #ef4444 !important;
+  border-color: #ef4444 !important;
+}
+
 .sidebar-panel.minimized {
   height: fit-content;
   align-self: flex-start;
@@ -4488,19 +4504,20 @@
 }
 
 .zoom-meeting-info-flyout.footer-flyout {
-  position: absolute !important;
-  bottom: calc(100% + 14px) !important;
+  position: fixed !important;
+  bottom: 72px !important;
+  right: 18px !important;
   top: auto !important;
-  right: 0 !important;
   left: auto !important;
-  width: 300px;
+  width: 320px;
+  max-width: calc(100vw - 24px);
   max-height: 75vh;
   overflow-y: auto;
   background: #151b26 !important;
   border: 1.5px solid rgba(56, 189, 248, 0.4);
-  border-radius: 12px;
+  border-radius: 14px;
   box-shadow: 0 16px 45px rgba(0, 0, 0, 0.9), 0 0 20px rgba(56, 189, 248, 0.25) !important;
-  z-index: 9999999 !important;
+  z-index: 99999999 !important;
   padding: 16px 18px 24px 18px !important;
   font-size: 0.8rem;
   display: block !important;
@@ -4508,6 +4525,19 @@
   opacity: 1 !important;
   pointer-events: auto !important;
   animation: flyoutPop 0.16s ease-out;
+}
+
+@media (max-width: 768px) {
+  .zoom-meeting-info-flyout.footer-flyout {
+    position: fixed !important;
+    bottom: calc(64px + env(safe-area-inset-bottom, 8px)) !important;
+    right: 10px !important;
+    left: auto !important;
+    top: auto !important;
+    width: min(340px, calc(100vw - 20px)) !important;
+    max-height: 75vh !important;
+    z-index: 99999999 !important;
+  }
 }
 
 .zoom-meeting-info-flyout.footer-flyout .zoom-info-meeting-title {
@@ -5150,4 +5180,23 @@
       min-height: 170px !important;
     }
   }
-}
+}
+
+
+/* Classroom Top Header Explicit Theme Overrides */
+[data-theme="light"] .room-header {
+  background: rgba(240, 253, 254, 0.95) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border-bottom: 1.5px solid rgba(8, 145, 178, 0.22) !important;
+  box-shadow: 0 4px 20px rgba(8, 145, 178, 0.08) !important;
+}
+
+[data-theme="dark"] .room-header,
+.dark-theme .room-header {
+  background: rgba(10, 25, 47, 0.96) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border-bottom: 1.5px solid rgba(56, 189, 248, 0.3) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}

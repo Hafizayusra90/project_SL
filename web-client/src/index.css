@@ -308,7 +308,33 @@ a:hover { color: #38bdf8; }
   color: #042f2e !important;
 }
 
+/* Universal Top Navbar Layout across all pages */
+.landing-nav,
+.dashboard-nav,
+.features-nav,
+.about-nav,
+.analytics-nav,
+.profile-nav,
+.summary-nav,
+.room-header {
+  height: 58px;
+  min-height: 58px;
+  display: flex !important;
+  flex-direction: row !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  padding: 0 1.5rem !important;
+  box-sizing: border-box !important;
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 100 !important;
+  flex-wrap: nowrap !important;
+}
+
 [data-theme="light"] .landing-nav,
+[data-theme="light"] .analytics-nav,
+[data-theme="light"] .profile-nav,
+[data-theme="light"] .summary-nav,
 [data-theme="light"] .dashboard-nav,
 [data-theme="light"] .features-nav,
 [data-theme="light"] .about-nav,
@@ -322,6 +348,42 @@ a:hover { color: #38bdf8; }
   -webkit-backdrop-filter: blur(20px) !important;
   border-bottom: 1.5px solid rgba(8, 145, 178, 0.22) !important;
   box-shadow: 0 4px 20px rgba(8, 145, 178, 0.08) !important;
+}
+
+[data-theme="dark"] .landing-nav,
+[data-theme="dark"] .dashboard-nav,
+[data-theme="dark"] .features-nav,
+[data-theme="dark"] .about-nav,
+[data-theme="dark"] .analytics-nav,
+[data-theme="dark"] .profile-nav,
+[data-theme="dark"] .summary-nav,
+[data-theme="dark"] .room-header,
+.dark-theme .room-header {
+  background: rgba(10, 25, 47, 0.96) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border-bottom: 1.5px solid rgba(56, 189, 248, 0.3) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
+@media (max-width: 768px) {
+  .landing-nav,
+  .dashboard-nav,
+  .features-nav,
+  .about-nav,
+  .analytics-nav,
+  .profile-nav,
+  .summary-nav,
+  .room-header {
+    height: 48px !important;
+    min-height: 48px !important;
+    padding: 0 8px !important;
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+  }
 }
 
 [data-theme="light"] input,

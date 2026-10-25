@@ -77,7 +77,8 @@
 }
 
 .nav-link {
-  color: #083344;
+  color: #0369a1 !important;
+  font-weight: 700;
   font-size: 0.92rem;
   font-weight: 600;
   text-decoration: none;
@@ -282,7 +283,8 @@
   gap: 0.5rem;
   padding: 0.85rem 2rem;
   background: rgba(255, 255, 255, 0.88);
-  color: #083344;
+  color: #0369a1 !important;
+  font-weight: 700;
   border: 1.5px solid rgba(8, 145, 178, 0.35);
   border-radius: var(--radius-md);
   font-size: 1rem;
@@ -319,7 +321,8 @@
 }
 
 [data-theme="dark"] .nav-link {
-  color: #c2f0f2;
+  color: #38bdf8 !important;
+  font-weight: 700 !important;
 }
 [data-theme="dark"] .nav-link:hover {
   color: #ffffff;
@@ -330,7 +333,8 @@
 }
 
 [data-theme="dark"] .hero-subtitle {
-  color: #c2f0f2;
+  color: #38bdf8 !important;
+  font-weight: 700 !important;
 }
 
 [data-theme="dark"] .hero-badge {
@@ -350,7 +354,12 @@
   .landing-nav {
     padding: 0.6rem 0.8rem !important;
     display: flex !important;
-    flex-direction: column !important;
+    flex-direction: row !important;
+    height: 52px !important;
+    min-height: 52px !important;
+    padding: 0 10px !important;
+    justify-content: space-between !important;
+    flex-wrap: nowrap !important;
     align-items: center !important;
     gap: 0.5rem !important;
   }
@@ -423,13 +432,7 @@
     padding: 0 4px !important;
   }
 
-  .hero-cta {
-    flex-direction: column !important;
-    width: 100% !important;
-    max-width: 300px !important;
-    margin: 0 auto !important;
-    gap: 0.75rem !important;
-  }
+  .hero-cta { display: flex !important; flex-direction: column !important; width: 100% !important; max-width: 320px !important; margin: 0 auto !important; gap: 0.75rem !important; }
 
   .large-primary-btn,
   .secondary-btn {

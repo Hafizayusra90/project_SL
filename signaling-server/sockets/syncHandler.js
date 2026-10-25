@@ -293,6 +293,43 @@ const syncHandler = (io, socket) => {
       return;
     }
 
+    // Check active instructor and session existence
+    const variants = getRoomVariants(roomId);
+    let activeRoomDoc = null;
+    try {
+      activeRoomDoc = await Room.findOne({ roomId: { $in: variants } }).lean();
+    } catch (e) {}
+
+    let instructorOnline = false;
+    for (const v of variants) {
+      const instSockets = getInstructorSockets(v);
+      if (instSockets && instSockets.length > 0) {
+        instructorOnline = true;
+        break;
+      }
+    }
+
+    if (!activeRoomDoc && !instructorOnline) {
+      socket.emit('admission-denied', {
+        message: 'This meeting does not exist or has not been started by the instructor yet.'
+      });
+      return;
+    }
+
+    if (activeRoomDoc && activeRoomDoc.isActive === false && !instructorOnline) {
+      socket.emit('admission-denied', {
+        message: 'This meeting session has already ended.'
+      });
+      return;
+    }
+
+    if (!instructorOnline) {
+      socket.emit('admission-denied', {
+        message: 'The instructor has not started the live class yet. Please wait for the teacher to join.'
+      });
+      return;
+    }
+
     // Room locked check
     if (lockedRooms.has(roomId)) {
       socket.emit('admission-denied', { message: 'This room has been locked by the instructor.' });
@@ -314,8 +351,8 @@ const syncHandler = (io, socket) => {
     const entered = (passcode || '').trim().toLowerCase();
     const real = (targetPasscode || '').trim().toLowerCase();
 
-    // Authorized if entered passcode matches or if room has no passcode configured yet
-    const isAuthorized = targetPasscode ? (entered === real) : Boolean(entered);
+    // STRICT PASSCODE MATCH: must have targetPasscode, must have entered passcode, and entered === real
+    const isAuthorized = Boolean(targetPasscode && entered && entered === real);
 
     if (isAuthorized) {
       admittedSockets.add(socket.id);

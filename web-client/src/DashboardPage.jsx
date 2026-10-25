@@ -1366,7 +1366,7 @@ const handleCreateRoom = async () => {
 
       {/* Top Header Navigation */}
       <nav className="landing-nav">
-        <div className="logo-container" style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
+        <div className="logo-container" style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'nowrap' }}>
           <button type="button" className="auth-back-btn" onClick={() => onNavigate && onNavigate('home')}>
             <img
               src={logoImg}
