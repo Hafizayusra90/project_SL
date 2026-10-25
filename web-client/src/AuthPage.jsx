@@ -25,6 +25,19 @@ function AuthPage({ onLoginSuccess, onNavigate, theme, onToggleTheme }) {
     setNotice({ show: true, message, type });
   };
 
+  const parseJsonResponse = async (response) => {
+    try {
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        return await response.json();
+      }
+      const text = await response.text();
+      return { message: text?.slice(0, 150) || ("Server responded with status " + response.status) };
+    } catch (e) {
+      return { message: "Server connection error (" + response.status + ")" };
+    }
+  };
+
   // ── Handle Social Login (Google / GitHub) ──
   const handleSocialAuth = async (provider) => {
     const defaultName = provider === 'Google'
@@ -38,7 +51,7 @@ function AuthPage({ onLoginSuccess, onNavigate, theme, onToggleTheme }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: defaultName, email: defaultEmail, role })
       });
-      const data = await response.json();
+      const data = await parseJsonResponse(response);
       if (response.ok) {
         showNotice(`✅ ${provider} login successful!`, 'success');
         localStorage.setItem('token', data.token);
@@ -114,7 +127,7 @@ function AuthPage({ onLoginSuccess, onNavigate, theme, onToggleTheme }) {
         body: JSON.stringify(payload)
       });
       
-      const data = await response.json();
+      const data = await parseJsonResponse(response);
 
       if (response.ok) {
         showNotice(`🎉 ${authMode === 'login' ? 'Login' : 'Registration'} Successful!`, 'success');
@@ -160,7 +173,7 @@ function AuthPage({ onLoginSuccess, onNavigate, theme, onToggleTheme }) {
           newPassword: formData.newPassword
         })
       });
-      const data = await response.json();
+      const data = await parseJsonResponse(response);
       if (response.ok) {
         showNotice(data.message || 'Password reset successfully! You can now sign in.', 'success');
         setFormData(prev => ({ ...prev, email: data.email || prev.email, password: '' }));
@@ -190,7 +203,7 @@ function AuthPage({ onLoginSuccess, onNavigate, theme, onToggleTheme }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ recoveryEmail: formData.recoveryEmail.trim() })
       });
-      const data = await response.json();
+      const data = await parseJsonResponse(response);
       if (response.ok) {
         setRecoveredEmails(data.accounts || []);
         showNotice(`Account located! Found ${data.accounts?.length || 1} registered user(s).`, 'success');

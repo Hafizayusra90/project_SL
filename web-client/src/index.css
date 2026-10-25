@@ -373,7 +373,35 @@ a:hover { color: #38bdf8; }
   .about-nav,
   .analytics-nav,
   .profile-nav,
-  .summary-nav,
+  .summary-nav {
+    height: 52px !important;
+    min-height: 52px !important;
+    padding: 0 10px !important;
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-start !important;
+    align-items: center !important;
+    flex-wrap: nowrap !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    -webkit-overflow-scrolling: touch !important;
+    white-space: nowrap !important;
+    scrollbar-width: none !important;
+    max-width: 100vw !important;
+    box-sizing: border-box !important;
+    gap: 0.75rem !important;
+  }
+
+  .landing-nav::-webkit-scrollbar,
+  .dashboard-nav::-webkit-scrollbar,
+  .features-nav::-webkit-scrollbar,
+  .about-nav::-webkit-scrollbar,
+  .analytics-nav::-webkit-scrollbar,
+  .profile-nav::-webkit-scrollbar,
+  .summary-nav::-webkit-scrollbar {
+    display: none !important;
+  }
+
   .room-header {
     height: 48px !important;
     min-height: 48px !important;
@@ -383,6 +411,8 @@ a:hover { color: #38bdf8; }
     justify-content: space-between !important;
     align-items: center !important;
     flex-wrap: nowrap !important;
+    max-width: 100vw !important;
+    box-sizing: border-box !important;
   }
 }
 
