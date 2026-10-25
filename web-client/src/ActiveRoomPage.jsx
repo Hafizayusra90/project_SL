@@ -3478,8 +3478,7 @@ function ActiveRoomPage({
 
           <h2 className="room-header-title">
             <img src="/logo.png" alt="SyncLearn" className="room-header-logo" />
-            <span className="room-label">Classroom:</span>
-            <code>{formatMeetingIdWithDashes(roomId)}</code>
+            <span className="logo-text">SyncLearn</span>
           </h2>
           <span className="status-indicator">
             {isConnected ? '🟢 Live' : '🔴 Connecting...'}
