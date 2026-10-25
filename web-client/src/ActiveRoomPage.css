@@ -33,6 +33,15 @@
   z-index: 50;
 }
 
+[data-theme="dark"] .room-header,
+.dark-theme .room-header {
+  background: rgba(10, 25, 47, 0.96) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border-bottom: 1.5px solid rgba(56, 189, 248, 0.3) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
 .room-info {
   display: flex;
   align-items: center;
@@ -1962,6 +1971,43 @@
 
 .zoom-main-btn.muted-btn .zoom-btn-label {
   color: #f87171;
+}
+
+/* Light theme contrast for footer buttons */
+[data-theme="light"] .zoom-main-btn {
+  color: #042f2e !important;
+}
+[data-theme="light"] .zoom-btn-label {
+  color: #0e4252 !important;
+}
+[data-theme="light"] .zoom-arrow-btn {
+  color: #475569 !important;
+}
+[data-theme="light"] .zoom-main-btn:hover {
+  background: rgba(8, 145, 178, 0.15) !important;
+  color: #0891b2 !important;
+}
+[data-theme="light"] .zoom-arrow-btn:hover,
+[data-theme="light"] .zoom-arrow-btn.open {
+  background: rgba(8, 145, 178, 0.2) !important;
+  color: #0891b2 !important;
+}
+
+/* Hand Raise Grid & Badge Styling */
+.video-card.hand-raised-card {
+  border: 2.5px solid #f97316 !important;
+  box-shadow: 0 0 20px rgba(249, 115, 22, 0.65) !important;
+  animation: handPulseBorder 1.8s infinite alternate !important;
+}
+
+@keyframes handPulseBorder {
+  0% { box-shadow: 0 0 10px rgba(249, 115, 22, 0.4); border-color: #f97316; }
+  100% { box-shadow: 0 0 24px rgba(249, 115, 22, 0.85); border-color: #fdba74; }
+}
+
+@keyframes handBounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
 }
 
 /* ── Zoom Popup Upward Menus ── */

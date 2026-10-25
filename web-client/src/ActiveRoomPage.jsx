@@ -7,7 +7,7 @@ import WhiteboardCanvas from './WhiteboardCanvas';
 import { socket } from './socket';
 import VideoPlayer from './components/VideoPlayer';
 // Remote peer video & audio component with dedicated audio element and speaking indicator
-const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
+const RemoteVideo = ({ peer, peerInfo, mediaState, isHandRaised = false }) => {
   const videoRef = useRef(null);
   const audioRef = useRef(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
@@ -506,6 +506,31 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
         </div>
       )}
 
+      {/* Hand Raised badge indicator (top-right) */}
+      {isHandRaised && (
+        <div style={{
+          position: 'absolute',
+          top: 8,
+          right: 8,
+          background: 'rgba(234, 88, 12, 0.95)',
+          border: '1.5px solid #ffedd5',
+          color: '#ffffff',
+          fontSize: '0.74rem',
+          fontWeight: 800,
+          padding: '3px 9px',
+          borderRadius: '99px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          boxShadow: '0 0 15px rgba(249, 115, 22, 0.75)',
+          zIndex: 25,
+          animation: 'handBounce 1.5s ease-in-out infinite'
+        }}>
+          <span style={{ fontSize: '0.9rem' }}>✋</span>
+          <span>Hand Raised</span>
+        </div>
+      )}
+
       {audioBlocked && (
         <button
           type="button"
@@ -537,7 +562,7 @@ const RemoteVideo = ({ peer, peerInfo, mediaState }) => {
 };
 
 // ── Local User Video Card with Auto-play & Live Speaking Indicator ──
-const LocalVideo = ({ stream, videoOn, isSpeaking, micOn, isBackgroundBlurred = false, isAutoFramed = false, user, onOpenSettings }) => {
+const LocalVideo = ({ stream, videoOn, isSpeaking, micOn, isBackgroundBlurred = false, isAutoFramed = false, user, onOpenSettings, isHandRaised = false }) => {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -548,7 +573,7 @@ const LocalVideo = ({ stream, videoOn, isSpeaking, micOn, isBackgroundBlurred = 
   }, [stream, videoOn]);
 
   return (
-    <div className={`video-card ${isSpeaking ? 'peer-speaking-highlight' : ''}`}>
+    <div className={`video-card ${isSpeaking ? 'peer-speaking-highlight' : ''} ${isHandRaised ? 'hand-raised-card' : ''}`}>
       {/* ── Image 3: When camera is off, show Profile Picture ── */}
       {!videoOn ? (
         <div
@@ -598,6 +623,29 @@ const LocalVideo = ({ stream, videoOn, isSpeaking, micOn, isBackgroundBlurred = 
         </span>
       )}
 
+
+      {isHandRaised && (
+        <span style={{
+          position: 'absolute',
+          top: 8,
+          left: 8,
+          background: 'rgba(234, 88, 12, 0.95)',
+          border: '1.5px solid #ffedd5',
+          color: '#ffffff',
+          fontSize: '0.72rem',
+          fontWeight: 800,
+          padding: '2px 8px',
+          borderRadius: '99px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          boxShadow: '0 0 12px rgba(234, 88, 12, 0.75)',
+          zIndex: 25,
+          animation: 'handBounce 1.5s ease-in-out infinite'
+        }}>
+          <span>✋ Hand Raised</span>
+        </span>
+      )}
 
       <span className="video-label" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 8px' }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -938,6 +986,7 @@ function ActiveRoomPage({
   const [participants, setParticipants] = useState([]);
   const [isRoomLocked, setIsRoomLocked] = useState(false);
   const [isMuteAllActive, setIsMuteAllActive] = useState(false);
+  const [isMutedByHost, setIsMutedByHost] = useState(false);
 
   // Floating Toast Notification
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
@@ -1066,11 +1115,28 @@ function ActiveRoomPage({
       .catch(() => showToast('Failed to copy invite link', 'error'));
   };
 
+  const formatMeetingIdWithDashes = (id) => {
+    if (!id) return '';
+    const str = String(id).trim();
+    if (str.includes('-')) return str;
+    const digitsOnly = str.replace(/\s+/g, '');
+    if (/^\d{9}$/.test(digitsOnly)) {
+      return `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3, 6)}-${digitsOnly.slice(6, 9)}`;
+    }
+    if (/^\d{10}$/.test(digitsOnly)) {
+      return `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3, 6)}-${digitsOnly.slice(6, 10)}`;
+    }
+    if (/^\d{6}$/.test(digitsOnly)) {
+      return `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3, 6)}`;
+    }
+    return str;
+  };
+
   const copyClassInvitation = () => {
     if (!roomId) return;
     const inviteUrl = getShareableLink(false);
     const wifiUrl = getShareableLink('wifi');
-    const formattedId = roomId.includes('-') ? roomId.replace(/-/g, ' ') : roomId;
+    const formattedId = formatMeetingIdWithDashes(roomId);
     const instructorName = isInstructor ? (user?.name || 'Instructor') : (roomHostName || 'Instructor');
     const topicTitle = (currentLectureTopic && currentLectureTopic !== 'Live Classroom' && !currentLectureTopic.startsWith('Live Session'))
       ? currentLectureTopic
@@ -1712,11 +1778,26 @@ function ActiveRoomPage({
     // Host Controls: Mute (all or individual)
     socket.on('force-mute', () => {
       if (!isInstructor) {
+        setIsMutedByHost(true);
         setMicOn(false);
         const audioTrack = userStreamRef.current?.getAudioTracks()[0];
         if (audioTrack) audioTrack.enabled = false;
         socket.emit('media-state-change', { roomId: cleanRoom, videoOn, micOn: false });
-        showToast('🔇 You have been muted by the instructor', 'error');
+        showToast('🔇 You have been muted by the instructor (Microphone locked)', 'error');
+      }
+    });
+
+    socket.on('host-unmute-all', () => {
+      if (!isInstructor) {
+        setIsMutedByHost(false);
+        showToast('🎙️ Instructor has unlocked participant microphones.', 'info');
+      }
+    });
+
+    socket.on('host-unmute-student', () => {
+      if (!isInstructor) {
+        setIsMutedByHost(false);
+        showToast('🎙️ Instructor has unlocked your microphone. You can now speak.', 'success');
       }
     });
 
@@ -1900,17 +1981,23 @@ function ActiveRoomPage({
 
     // ── Category 1: Hand Raise Events ──
     socket.on('student-hand-raised', (data) => {
-      setHandRaisedUsers(prev => ({
-        ...prev,
-        [data.socketId]: { studentName: data.studentName, time: data.time }
-      }));
+      setHandRaisedUsers(prev => {
+        const next = { ...prev };
+        const entry = { studentName: data.studentName, time: data.time || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) };
+        if (data.socketId) next[data.socketId] = entry;
+        if (data.userId) next[data.userId] = entry;
+        if (data.studentName) next[data.studentName] = entry;
+        return next;
+      });
       showToast(`✋ ${data.studentName} raised their hand!`, 'info');
     });
 
     socket.on('student-hand-lowered', (data) => {
       setHandRaisedUsers(prev => {
         const next = { ...prev };
-        delete next[data.socketId];
+        if (data.socketId) delete next[data.socketId];
+        if (data.userId) delete next[data.userId];
+        if (data.studentName) delete next[data.studentName];
         return next;
       });
     });
@@ -1953,6 +2040,7 @@ function ActiveRoomPage({
       socket.off('admission-request'); socket.off('pending-admissions-list');
       socket.off('chat-lock-status'); socket.off('chat-lock-error');
       socket.off('force-mute'); socket.off('force-removed');
+      socket.off('host-unmute-all'); socket.off('host-unmute-student');
       socket.off('force-toggle-camera'); socket.off('peer-media-state-change');
       socket.off('room-media-states-sync');
       socket.off('room-participants-update'); socket.off('room-lock-status');
@@ -2062,13 +2150,13 @@ function ActiveRoomPage({
   const handleHostMuteAll = () => {
     const nextMuted = !isMuteAllActive;
     setIsMuteAllActive(nextMuted);
-    socket.emit('host-mute-all', { roomId, isMuted: nextMuted });
-    showToast(nextMuted ? '🔇 Muted all participants' : '🔊 Unmuted all participants');
+    socket.emit('host-mute-all', { roomId: cleanRoomId(roomId), isMuted: nextMuted });
+    showToast(nextMuted ? '🔇 Muted all participants (Microphones locked)' : '🎙️ Unmuted all participants (Unlocked)');
   };
 
-  const handleHostMuteStudent = (targetSocketId, targetName) => {
-    socket.emit('host-mute-student', { roomId, targetSocketId });
-    showToast(`🔇 Muted ${targetName || 'student'}`);
+  const handleHostMuteStudent = (targetSocketId, targetName, shouldMute = true) => {
+    socket.emit('host-mute-student', { roomId: cleanRoomId(roomId), targetSocketId, isMuted: shouldMute });
+    showToast(shouldMute ? `🔇 Muted & locked ${targetName || 'student'}` : `🎙️ Unlocked ${targetName || 'student'}'s microphone`);
   };
 
   const handleHostToggleStudentCamera = (targetSocketId, targetName, currentCamOff) => {
@@ -2289,14 +2377,16 @@ function ActiveRoomPage({
     setHasHandRaised(nextState);
     if (nextState) {
       socket.emit('raise-hand', {
-        roomId,
-        studentName: user?.name || 'Student'
+        roomId: cleanRoomId(roomId),
+        studentName: user?.name || 'Student',
+        userId: user?.id || user?._id || socket.id
       });
       showToast('✋ You raised your hand!');
     } else {
       socket.emit('lower-hand', {
-        roomId,
-        socketId: socket.id
+        roomId: cleanRoomId(roomId),
+        socketId: socket.id,
+        userId: user?.id || user?._id || socket.id
       });
       showToast('Hand lowered');
     }
@@ -2746,6 +2836,10 @@ function ActiveRoomPage({
   };
 
   const toggleMic = async () => {
+    if (!isInstructor && isMutedByHost) {
+      showToast('⚠️ Microphone is locked by the instructor. You cannot unmute yourself.', 'error');
+      return;
+    }
     const nextMic = !micOn;
 
     if (nextMic) {
@@ -3354,7 +3448,8 @@ function ActiveRoomPage({
 
           <h2 className="room-header-title">
             <img src="/logo.png" alt="SyncLearn" className="room-header-logo" />
-            <span className="room-label">Classroom</span>
+            <span className="room-label">Classroom:</span>
+            <code>{formatMeetingIdWithDashes(roomId)}</code>
           </h2>
           <span className="status-indicator">
             {isConnected ? '🟢 Live' : '🔴 Connecting...'}
@@ -3877,6 +3972,7 @@ function ActiveRoomPage({
               isAutoFramed={isAutoFramed}
               user={user}
               onOpenSettings={onOpenSettings}
+              isHandRaised={hasHandRaised}
             />
             {peers.map(peerObj => {
               const pInfo = participants.find(p => p.socketId === peerObj.peerID) || {
@@ -3885,9 +3981,15 @@ function ActiveRoomPage({
                 userRole: 'student'
               };
               const mState = peerMediaStates[peerObj.peerID];
+              const isPeerHandRaised = Boolean(
+                handRaisedUsers[peerObj.peerID] || 
+                handRaisedUsers[pInfo.socketId] || 
+                handRaisedUsers[pInfo.userId] || 
+                (pInfo.userName && handRaisedUsers[pInfo.userName])
+              );
               return (
-                <div className="video-card" key={peerObj.peerID}>
-                  <RemoteVideo peer={peerObj.peer} peerInfo={pInfo} mediaState={mState} />
+                <div className={`video-card ${isPeerHandRaised ? 'hand-raised-card' : ''}`} key={peerObj.peerID}>
+                  <RemoteVideo peer={peerObj.peer} peerInfo={pInfo} mediaState={mState} isHandRaised={isPeerHandRaised} />
                 </div>
               );
             })}
@@ -4685,8 +4787,9 @@ function ActiveRoomPage({
                     ) : (
                       participants.map((p) => {
                         const isSelf = p.socketId === socket.id;
-                        const hasHand = handRaisedUsers[p.socketId];
+                        const hasHand = handRaisedUsers[p.socketId] || handRaisedUsers[p.userId] || (p.userName && handRaisedUsers[p.userName]) || (isSelf && hasHandRaised);
                         const eng = engagementStats[p.socketId];
+                        const isPeerMuted = peerMediaStates[p.socketId]?.micOn === false;
 
                         return (
                           <div key={p.socketId} className={`participant-item ${isSelf ? 'current-user' : ''}`}>
@@ -4702,8 +4805,8 @@ function ActiveRoomPage({
                                   </span>
 
                                   {hasHand && (
-                                    <span className="hand-raise-tag" title={`Hand raised at ${hasHand.time}`}>
-                                      ✋ Raised
+                                    <span className="hand-raise-tag" title={hasHand.time ? `Hand raised at ${hasHand.time}` : 'Hand raised'}>
+                                      ✋ Raised Hand
                                     </span>
                                   )}
 
@@ -4727,13 +4830,34 @@ function ActiveRoomPage({
                             {/* Individual student control buttons for Host */}
                             {isInstructor && !isSelf && (
                               <div className="participant-host-controls">
+                                {hasHand && (
+                                  <button
+                                    type="button"
+                                    className="btn-participant-ctrl"
+                                    style={{ background: 'rgba(234, 88, 12, 0.2)', borderColor: '#ea580c', color: '#fb923c', fontWeight: 700 }}
+                                    onClick={() => {
+                                      socket.emit('lower-hand', { roomId: cleanRoomId(roomId), socketId: p.socketId, userId: p.userId });
+                                      setHandRaisedUsers(prev => {
+                                        const next = { ...prev };
+                                        delete next[p.socketId];
+                                        delete next[p.userId];
+                                        if (p.userName) delete next[p.userName];
+                                        return next;
+                                      });
+                                      showToast(`Lowered ${p.userName}'s hand`);
+                                    }}
+                                    title={`Lower ${p.userName}'s hand`}
+                                  >
+                                    ✋ Lower Hand
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   className="btn-participant-ctrl"
-                                  onClick={() => handleHostMuteStudent(p.socketId, p.userName)}
-                                  title={`Mute ${p.userName}`}
+                                  onClick={() => handleHostMuteStudent(p.socketId, p.userName, isPeerMuted ? false : true)}
+                                  title={isPeerMuted ? `Unlock microphone for ${p.userName}` : `Mute & lock ${p.userName}`}
                                 >
-                                  🔇 Mute
+                                  {isPeerMuted ? '🎙️ Unmute' : '🔇 Mute'}
                                 </button>
                                 <button
                                   type="button"
@@ -4777,10 +4901,12 @@ function ActiveRoomPage({
             type="button"
             className={`zoom-main-btn ${!micOn ? 'muted-btn' : ''}`}
             onClick={toggleMic}
-            title={micOn ? 'Mute Audio' : 'Unmute Audio'}
+            title={!isInstructor && isMutedByHost ? 'Microphone locked by instructor' : (micOn ? 'Mute Audio' : 'Unmute Audio')}
           >
             <div className="zoom-btn-icon">
-              {micOn ? (
+              {!isInstructor && isMutedByHost ? (
+                <span style={{ fontSize: '1.05rem' }}>🔒</span>
+              ) : micOn ? (
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
                   <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -4799,7 +4925,7 @@ function ActiveRoomPage({
                 </svg>
               )}
             </div>
-            <span className="zoom-btn-label">Audio</span>
+            <span className="zoom-btn-label">{!isInstructor && isMutedByHost ? 'Locked' : 'Audio'}</span>
           </button>
 
           <button
@@ -5218,12 +5344,12 @@ function ActiveRoomPage({
                 <div className="zoom-info-field-group">
                   <span className="zoom-info-field-title">Meeting ID</span>
                   <div className="zoom-info-field-value-row">
-                    <span className="zoom-info-field-val">{roomId}</span>
+                    <span className="zoom-info-field-val">{formatMeetingIdWithDashes(roomId)}</span>
                     <button
                       type="button"
                       className="zoom-info-copy-btn"
                       onClick={() => {
-                        navigator.clipboard?.writeText(roomId);
+                        navigator.clipboard?.writeText(formatMeetingIdWithDashes(roomId));
                         showToast('📋 Meeting ID copied!');
                       }}
                       title="Copy Meeting ID"
@@ -5264,19 +5390,24 @@ function ActiveRoomPage({
                 {isInstructor && (
                   <>
                     <div className="zoom-info-field-group">
-                      <span className="zoom-info-field-title" style={{ color: '#22c55e', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
+                      <span className="zoom-info-field-title" style={{ color: theme === 'light' ? '#15803d' : '#4ade80', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
                         <span>📱 WhatsApp & Mobile Link</span>
                       </span>
                       <div className="zoom-info-field-value-row">
-                        <span className="zoom-info-field-val zoom-info-green-link" style={{ fontSize: '0.72rem', wordBreak: 'break-all', fontWeight: 700 }}>
+                        <span className="zoom-info-field-val zoom-info-green-link" style={{ fontSize: '0.72rem', wordBreak: 'break-all', fontWeight: 700, color: theme === 'light' ? '#15803d' : '#4ade80' }}>
                           {getShareableLink(false)}
                         </span>
                         <button
                           type="button"
                           className="zoom-info-copy-btn"
-                          style={{ background: 'rgba(34, 197, 94, 0.2)', borderColor: '#22c55e', color: '#16a34a', fontWeight: 700 }}
+                          style={{
+                            background: theme === 'light' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.25)',
+                            borderColor: theme === 'light' ? '#16a34a' : '#4ade80',
+                            color: theme === 'light' ? '#15803d' : '#4ade80',
+                            fontWeight: 700
+                          }}
                           onClick={() => copyInviteLink(false)}
-                          title="Copy WhatsApp & Mobile Link (Sends as clickable green link in WhatsApp)"
+                          title="Copy WhatsApp & Mobile Link"
                         >
                           Copy Link
                         </button>
@@ -5285,9 +5416,9 @@ function ActiveRoomPage({
 
                     {/* 3. Local PC Link */}
                     <div className="zoom-info-field-group">
-                      <span className="zoom-info-field-title">💻 Local PC Link</span>
+                      <span className="zoom-info-field-title" style={{ color: theme === 'light' ? '#0369a1' : '#38bdf8', fontWeight: 700 }}>💻 Local PC Link</span>
                       <div className="zoom-info-field-value-row">
-                        <span className="zoom-info-field-val" style={{ fontSize: '0.68rem', wordBreak: 'break-all' }}>
+                        <span className="zoom-info-field-val" style={{ fontSize: '0.68rem', wordBreak: 'break-all', color: theme === 'light' ? '#0284c7' : '#7dd3fc' }}>
                           {getShareableLink(true)}
                         </span>
                         <button
@@ -5302,26 +5433,6 @@ function ActiveRoomPage({
                     </div>
                   </>
                 )}
-
-                {/* 4. Host Connected Status */}
-                <div className="zoom-info-field-group">
-                  <span className="zoom-info-field-title" style={{ color: '#38bdf8', fontWeight: 700 }}>👨‍🏫 Host Status</span>
-                  <div className="zoom-info-field-value-row">
-                    <span className="zoom-info-field-val" style={{ color: '#38bdf8', fontWeight: 700 }}>
-                      Host connected: {isInstructor ? (user?.name || 'Instructor') : (roomHostName || 'Instructor')}
-                    </span>
-                  </div>
-                </div>
-
-                {/* 5. Participants Connected Status */}
-                <div className="zoom-info-field-group">
-                  <span className="zoom-info-field-title" style={{ color: '#4ade80', fontWeight: 700 }}>👥 Participants Status</span>
-                  <div className="zoom-info-field-value-row">
-                    <span className="zoom-info-field-val" style={{ color: '#4ade80', fontWeight: 700 }}>
-                      Participants connected: {participants.length || 1}
-                    </span>
-                  </div>
-                </div>
               </div>
             )}
           </div>

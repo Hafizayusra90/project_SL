@@ -448,15 +448,29 @@ const syncHandler = (io, socket) => {
   });
 
   // ── Host Controls: Mute All ──
-  socket.on('host-mute-all', ({ roomId }) => {
-    console.log(`🔇 Host muted all in room: ${roomId}`);
-    socket.to(roomId).emit('force-mute');
+  socket.on('host-mute-all', ({ roomId: rawRoomId, isMuted }) => {
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId || socket.roomId);
+    const roomId = canonicalRoomId || sanitizeRoomId(rawRoomId || socket.roomId);
+    console.log(`🔇 Host ${isMuted === false ? 'unmuted' : 'muted'} all in room: ${roomId}`);
+    if (roomId) {
+      if (isMuted === false) {
+        socket.to(roomId).emit('host-unmute-all');
+      } else {
+        socket.to(roomId).emit('force-mute', { byHost: true, lock: true });
+      }
+    }
   });
 
-  // ── Host Controls: Individual Student Mute ──
-  socket.on('host-mute-student', ({ roomId, targetSocketId }) => {
-    console.log(`🔇 Host muted student ${targetSocketId} in ${roomId}`);
-    io.to(targetSocketId).emit('force-mute', { byHost: true });
+  // ── Host Controls: Individual Student Mute / Unmute ──
+  socket.on('host-mute-student', ({ roomId: rawRoomId, targetSocketId, isMuted = true }) => {
+    console.log(`🔇 Host ${isMuted ? 'muted' : 'unmuted'} student ${targetSocketId}`);
+    if (targetSocketId) {
+      if (isMuted) {
+        io.to(targetSocketId).emit('force-mute', { byHost: true, lock: true });
+      } else {
+        io.to(targetSocketId).emit('host-unmute-student');
+      }
+    }
   });
 
   // ── Host Controls: Individual Student Camera Toggle ──
@@ -633,17 +647,27 @@ const syncHandler = (io, socket) => {
 
   // ── Hand Raise Queue ──
   socket.on('raise-hand', (data) => {
-    io.to(data.roomId).emit('student-hand-raised', {
-      socketId: socket.id,
-      studentName: data.studentName,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    });
+    const canonicalRoomId = getCanonicalRoomId(data?.roomId || socket.roomId);
+    const roomId = canonicalRoomId || sanitizeRoomId(data?.roomId || socket.roomId);
+    if (roomId) {
+      io.to(roomId).emit('student-hand-raised', {
+        socketId: socket.id,
+        userId: data?.userId || socket.id,
+        studentName: data?.studentName || 'Student',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      });
+    }
   });
 
   socket.on('lower-hand', (data) => {
-    io.to(data.roomId).emit('student-hand-lowered', {
-      socketId: data.socketId || socket.id,
-    });
+    const canonicalRoomId = getCanonicalRoomId(data?.roomId || socket.roomId);
+    const roomId = canonicalRoomId || sanitizeRoomId(data?.roomId || socket.roomId);
+    if (roomId) {
+      io.to(roomId).emit('student-hand-lowered', {
+        socketId: data?.socketId || socket.id,
+        userId: data?.userId,
+      });
+    }
   });
 
   // ── Category 3: Session Recording Broadcast ──

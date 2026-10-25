@@ -387,6 +387,33 @@ a:hover { color: #38bdf8; }
   color: #ffffff !important;
 }
 
+/* [data-theme="dark"] Gradient Text & Room Header Overrides */
+[data-theme="dark"] .gradient-text,
+.dark-theme .gradient-text {
+  background: linear-gradient(135deg, #38bdf8 0%, #00e5ff 40%, #818cf8 100%) !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  background-clip: text !important;
+  filter: drop-shadow(0 2px 10px rgba(56, 189, 248, 0.45));
+}
+
+[data-theme="dark"] .room-header,
+.dark-theme .room-header {
+  background: rgba(10, 25, 47, 0.96) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border-bottom: 1.5px solid rgba(56, 189, 248, 0.3) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
+[data-theme="dark"] .room-footer,
+.dark-theme .room-footer {
+  background: rgba(5, 22, 42, 0.96) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border-top: 1.5px solid rgba(56, 189, 248, 0.32) !important;
+}
+
 /* ── Small Top Navbar Theme Icon Button ── */
 .theme-icon-btn {
   width: 38px;
