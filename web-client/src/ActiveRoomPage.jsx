@@ -1045,7 +1045,7 @@ function ActiveRoomPage({
 
   // Network LAN IP & Public Tunnel URL for sharing to mobile / WhatsApp / other devices
   const [networkLanIp, setNetworkLanIp] = useState('192.168.100.135');
-  const [tunnelUrl, setTunnelUrl] = useState('https://hats-approaches-observe-managed.trycloudflare.com');
+  const [tunnelUrl, setTunnelUrl] = useState('https://terrorism-numbers-yarn-planes.trycloudflare.com');
 
   useEffect(() => {
     fetch('/api/v1/network-info')
