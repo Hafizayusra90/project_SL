@@ -21,6 +21,7 @@ router.post('/register', async (req, res) => {
           title: title || 'Live Classroom',
           instructorName: instructorName || 'Instructor',
           ...(instructorEmail ? { instructorEmail } : {}),
+          ...(req.body.passcode ? { passcode: String(req.body.passcode).trim() } : {}),
           isActive: true
         }
       },

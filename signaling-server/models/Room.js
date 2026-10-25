@@ -17,10 +17,19 @@ const lectureMaterialSchema = new mongoose.Schema({
   uploadedAt: { type: Date, default: Date.now }
 }, { _id: false });
 
+const generateRandomPasscode = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+};
+
 const roomSchema = new mongoose.Schema({
   roomId: { type: String, required: true, unique: true, index: true },
   title: { type: String, default: 'Live Classroom' },
-  passcode: { type: String, default: 'JxkYHk' },
+  passcode: { type: String, default: generateRandomPasscode },
   instructorName: { type: String, default: 'Instructor' },
   instructorEmail: { type: String },
   instructorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

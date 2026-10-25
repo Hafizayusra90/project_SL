@@ -19,12 +19,39 @@ const getShareableHost = () => {
   return window.location.hostname;
 };
 
-const buildZoomInvitationText = (topic, roomId, instructorName) => {
+const formatMeetingIdWithDashes = (id) => {
+  if (!id) return '';
+  const str = String(id).trim();
+  if (str.includes('-')) return str;
+  const digitsOnly = str.replace(/\s+/g, '');
+  if (/^\d{9}$/.test(digitsOnly)) {
+    return `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3, 6)}-${digitsOnly.slice(6, 9)}`;
+  }
+  if (/^\d{10}$/.test(digitsOnly)) {
+    return `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3, 6)}-${digitsOnly.slice(6, 10)}`;
+  }
+  if (/^\d{6}$/.test(digitsOnly)) {
+    return `${digitsOnly.slice(0, 3)}-${digitsOnly.slice(3, 6)}`;
+  }
+  return str;
+};
+
+const generateMeetingPasscode = () => {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return code;
+};
+
+const buildZoomInvitationText = (topic, roomId, instructorName, passcode) => {
   const host = getShareableHost();
   const port = window.location.port || '5173';
   const hostParam = instructorName ? `&host=${encodeURIComponent(instructorName)}` : '';
   const joinUrl = `${window.location.protocol}//${host}:${port}?room=${encodeURIComponent(roomId)}${hostParam}`;
-  const displayId = roomId ? roomId.replace(/-/g, ' ') : '';
+  const displayId = formatMeetingIdWithDashes(roomId);
+  const activePasscode = passcode || (roomId ? localStorage.getItem('synclearn_passcode_' + roomId) : '') || generateMeetingPasscode();
   const nowStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 
   return `🎓 SyncLearn Live Classroom Invitation
@@ -37,7 +64,7 @@ const buildZoomInvitationText = (topic, roomId, instructorName) => {
 ${joinUrl}
 
 🆔 Meeting ID: ${displayId}
-🔐 Passcode: Direct Verified Access (No password required)
+🔐 Passcode: ${activePasscode}
 
 💡 Student Guidelines:
 1. Click the link above or open SyncLearn and enter Meeting ID: ${displayId}
@@ -53,13 +80,15 @@ function ClassInviteModal({
   topic,
   roomId,
   instructorName,
+  passcode,
   onCopyInvite,
   onCopyLink,
   onShareWhatsApp,
   onShareEmail
 }) {
   if (!isOpen) return null;
-  const displayId = roomId ? roomId.replace(/-/g, ' ') : '';
+  const displayId = formatMeetingIdWithDashes(roomId);
+  const activePasscode = passcode || (roomId ? localStorage.getItem('synclearn_passcode_' + roomId) : '') || generateMeetingPasscode();
   const hostParam = instructorName ? `&host=${encodeURIComponent(instructorName)}` : '';
   const joinUrl = `${window.location.origin}?room=${encodeURIComponent(roomId)}${hostParam}`;
 
@@ -97,8 +126,8 @@ function ClassInviteModal({
               <span className="preview-box-url">{joinUrl}</span>
             </div>
             <div className="preview-box-row">
-              <span className="preview-box-label">🔐 Security:</span>
-              <span className="preview-box-val" style={{ color: '#4ade80' }}>Direct Verified Access</span>
+              <span className="preview-box-label">🔐 Passcode:</span>
+              <span className="preview-box-val" style={{ color: '#38bdf8', fontWeight: 800 }}>{activePasscode}</span>
             </div>
           </div>
         </div>
@@ -127,6 +156,7 @@ function InstructorDashboard({
   user,
   createdRoomId,
   setCreatedRoomId,
+  createdPasscode,
   meetingTopic,
   setMeetingTopic,
   handleCreateRoom,
@@ -431,6 +461,15 @@ function InstructorDashboard({
     <button
       type="button"
       className="code-action-btn"
+      onClick={handleRegenerateCode}
+      title="Generate new Meeting ID and Passcode"
+    >
+      🎲 New ID
+    </button>
+
+    <button
+      type="button"
+      className="code-action-btn"
       onClick={handleCopyCreatedInvite}
       title="Copy classroom invitation link"
     >
@@ -458,7 +497,11 @@ function InstructorDashboard({
 
     <p>
       <strong>Meeting ID:</strong>{" "}
-      {createdRoomId || "Not generated"}
+      <code>{formatMeetingIdWithDashes(createdRoomId) || "Not generated"}</code>
+    </p>
+    <p>
+      <strong>Passcode:</strong>{" "}
+      <code style={{ background: 'rgba(56, 189, 248, 0.15)', padding: '2px 8px', borderRadius: '4px', color: '#0284c7', fontWeight: 800 }}>{createdPasscode}</code>
     </p>
 
     <button
@@ -880,6 +923,7 @@ function DashboardPage({
 }) {
   const [inputRoomId, setInputRoomId] = useState('');
   const [createdRoomId, setCreatedRoomId] = useState(() => generateZoomMeetingId());
+  const [createdPasscode, setCreatedPasscode] = useState(() => generateMeetingPasscode());
   const [meetingTopic, setMeetingTopic] = useState('');
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
@@ -1003,7 +1047,13 @@ const saveSessionToHistory = (roomId, topic, sessionDetails = {}) => {
   const handleRegenerateCode = () => {
     const newCode = generateZoomMeetingId();
     setCreatedRoomId(newCode);
-    showToast(`🎲 Generated new Class Meeting ID: ${newCode}`);
+    const newPass = generateMeetingPasscode();
+    setCreatedPasscode(newPass);
+    try {
+      localStorage.setItem('synclearn_passcode_' + newCode, newPass);
+      localStorage.setItem('synclearn_passcode_' + newCode.replace(/-/g, ''), newPass);
+    } catch(e) {}
+    showToast(`🎲 Generated new Meeting ID: ${newCode} & Passcode: ${newPass}`);
   };
 
   const handleCopyCreatedCode = () => {
@@ -1038,7 +1088,8 @@ const handleCopyZoomInvitation = async () => {
   const invitation = buildZoomInvitationText(
     meetingTopic.trim(),
     createdRoomId,
-    user?.name
+    user?.name,
+    createdPasscode
   );
 
   try {
@@ -1051,14 +1102,14 @@ const handleCopyZoomInvitation = async () => {
 };
 
   const handleShareWhatsApp = () => {
-    const text = buildZoomInvitationText(meetingTopic, createdRoomId, user?.name);
+    const text = buildZoomInvitationText(meetingTopic, createdRoomId, user?.name, createdPasscode);
     const url = `https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`;
     window.open(url, '_blank');
     showToast('💬 Opening WhatsApp to share class invitation!');
   };
 
   const handleShareEmail = () => {
-    const text = buildZoomInvitationText(meetingTopic, createdRoomId, user?.name);
+    const text = buildZoomInvitationText(meetingTopic, createdRoomId, user?.name, createdPasscode);
     const subject = `Live Class Invitation: ${meetingTopic || 'SyncLearn Online Session'}`;
     const mailto = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(text)}`;
     window.location.href = mailto;
@@ -1210,8 +1261,11 @@ const handleCreateRoom = async () => {
       "synclearn_host_" + targetRoom,
       user?.name || "Instructor"
     );
+    localStorage.setItem("synclearn_passcode_" + targetRoom, createdPasscode);
+    localStorage.setItem("synclearn_passcode_" + targetRoom.replace(/-/g, ""), createdPasscode); /*
+    );
 
-    setMeetingTopic(topic);
+    */ setMeetingTopic(topic);
     setCreatedRoomId(targetRoom);
 
     // Register the room with the backend.
@@ -1228,7 +1282,8 @@ const handleCreateRoom = async () => {
           body: JSON.stringify({
             roomId: targetRoom,
             instructorName: user?.name || "Instructor",
-            title: topic
+            title: topic,
+            passcode: createdPasscode
           })
         }
       );
@@ -1361,6 +1416,7 @@ const handleCreateRoom = async () => {
             user={user}
             createdRoomId={createdRoomId}
             setCreatedRoomId={setCreatedRoomId}
+            createdPasscode={createdPasscode}
             meetingTopic={meetingTopic}
             setMeetingTopic={setMeetingTopic}
             handleCreateRoom={handleCreateRoom}
@@ -1402,6 +1458,7 @@ const handleCreateRoom = async () => {
         topic={meetingTopic}
         roomId={createdRoomId}
         instructorName={user?.name}
+        passcode={createdPasscode}
         onCopyInvite={handleCopyZoomInvitation}
         onCopyLink={handleCopyCreatedInvite}
         onShareWhatsApp={handleShareWhatsApp}

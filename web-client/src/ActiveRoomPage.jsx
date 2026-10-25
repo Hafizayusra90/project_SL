@@ -1132,6 +1132,15 @@ function ActiveRoomPage({
     return str;
   };
 
+  const generateMeetingPasscode = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+    let code = '';
+    for (let i = 0; i < 6; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return code;
+  };
+
   const copyClassInvitation = () => {
     if (!roomId) return;
     const inviteUrl = getShareableLink(false);
@@ -1141,7 +1150,8 @@ function ActiveRoomPage({
     const topicTitle = (currentLectureTopic && currentLectureTopic !== 'Live Classroom' && !currentLectureTopic.startsWith('Live Session'))
       ? currentLectureTopic
       : 'Live Classroom Interactive Session';
-    const text = `🎓 SyncLearn Live Classroom Invitation\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n👨‍🏫 Instructor: ${instructorName}\n📚 Topic: ${topicTitle}\n📅 Status: Live In Session Now\n\n🔗 WhatsApp & Mobile Link (Direct Access):\n${inviteUrl}\n\n🆔 Meeting ID: ${formattedId}\n\n👉 Click the green link above to enter the whiteboard & video classroom directly on phone or PC.\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+    const nowStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+    const text = `🎓 SyncLearn Live Classroom Invitation\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n👨‍🏫 Instructor: ${instructorName}\n📚 Topic: ${topicTitle}\n📅 Date: ${nowStr} (Live In Session)\n\n🔗 Join Live Class (Mobile & PC):\n${inviteUrl}\n\n🆔 Meeting ID: ${formattedId}\n🔐 Passcode: ${roomPasscode}\n\n💡 Student Guidelines:\n1. Click the link above or open SyncLearn and enter Meeting ID: ${formattedId}\n2. Please join 5 minutes early with your camera and microphone enabled.\n3. Access real-time dual whiteboard, lecture typing pad, and AI quizzes.\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
     navigator.clipboard.writeText(text)
       .then(() => showToast('📋 WhatsApp class invitation copied! Ready to paste in WhatsApp.', 'success'))
       .catch(() => showToast('Failed to copy invitation', 'error'));
@@ -1185,7 +1195,24 @@ function ActiveRoomPage({
   const [isWaitingRoomEnabled, setIsWaitingRoomEnabled] = useState(false);
   const [hideProfilePictures, setHideProfilePictures] = useState(false);
   const [isDescriptionExpanded, setIsDescriptionExpanded] = useState(true);
-  const [roomPasscode, setRoomPasscode] = useState('JxkYHk');
+  const [roomPasscode, setRoomPasscode] = useState(() => {
+    try {
+      const cleanR = cleanRoomId(roomId);
+      const saved = localStorage.getItem('synclearn_passcode_' + cleanR) || localStorage.getItem('synclearn_passcode_' + roomId);
+      if (saved) return saved;
+    } catch(e) {}
+    const newPass = generateMeetingPasscode();
+    try {
+      const cleanR = cleanRoomId(roomId);
+      localStorage.setItem('synclearn_passcode_' + cleanR, newPass);
+      localStorage.setItem('synclearn_passcode_' + roomId, newPass);
+    } catch(e) {}
+    return newPass;
+  });
+  const roomPasscodeRef = useRef(roomPasscode);
+  useEffect(() => {
+    roomPasscodeRef.current = roomPasscode;
+  }, [roomPasscode]);
   const [activeSecurityAlert, setActiveSecurityAlert] = useState(null);
 
   // Auto-dismiss security alert after 8 seconds
@@ -1579,6 +1606,9 @@ function ActiveRoomPage({
         roomTopic: currentLectureTopic
       });
       socket.emit('media-state-change', { roomId: cleanRoom, videoOn: shouldEnableVideo, micOn: Boolean(initialMicOn) });
+      if (isInstructorRef.current && (roomPasscodeRef.current || roomPasscode)) {
+        socket.emit('set-room-passcode', { roomId: cleanRoom, passcode: roomPasscodeRef.current || roomPasscode });
+      }
 
       // WebRTC Peer signaling listeners
       socket.on('user-connected', userId => {
@@ -5370,7 +5400,7 @@ function ActiveRoomPage({
                   <div className="zoom-info-field-group">
                     <span className="zoom-info-field-title">Passcode</span>
                     <div className="zoom-info-field-value-row">
-                      <span className="zoom-info-field-val">{roomPasscode}</span>
+                      <span className="zoom-info-field-val" style={{ fontWeight: 800, color: '#38bdf8' }}>{roomPasscode}</span>
                       <button
                         type="button"
                         className="zoom-info-copy-btn"
@@ -5382,6 +5412,27 @@ function ActiveRoomPage({
                       >
                         Copy
                       </button>
+                      <button
+                        type="button"
+                        className="zoom-info-copy-btn"
+                        style={{ background: 'rgba(2, 132, 199, 0.25)', borderColor: '#38bdf8', color: '#38bdf8' }}
+                        onClick={() => {
+                          const newPass = generateMeetingPasscode();
+                          setRoomPasscode(newPass);
+                          roomPasscodeRef.current = newPass;
+                          window.__synclearnRoomPasscode = newPass;
+                          try {
+                            const cleanR = cleanRoomId(roomId);
+                            localStorage.setItem('synclearn_passcode_' + cleanR, newPass);
+                            localStorage.setItem('synclearn_passcode_' + roomId, newPass);
+                          } catch(e) {}
+                          socket.emit('set-room-passcode', { roomId: cleanRoomId(roomId), passcode: newPass });
+                          showToast(`✨ Passcode changed to: ${newPass}`, 'success');
+                        }}
+                        title="Generate a new passcode for this meeting"
+                      >
+                        🔄 Change
+                      </button>
                     </div>
                   </div>
                 )}
@@ -5390,20 +5441,20 @@ function ActiveRoomPage({
                 {isInstructor && (
                   <>
                     <div className="zoom-info-field-group">
-                      <span className="zoom-info-field-title" style={{ color: theme === 'light' ? '#15803d' : '#4ade80', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
+                      <span className="zoom-info-field-title" style={{ color: '#22c55e', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 700 }}>
                         <span>📱 WhatsApp & Mobile Link</span>
                       </span>
                       <div className="zoom-info-field-value-row">
-                        <span className="zoom-info-field-val zoom-info-green-link" style={{ fontSize: '0.72rem', wordBreak: 'break-all', fontWeight: 700, color: theme === 'light' ? '#15803d' : '#4ade80' }}>
+                        <span className="zoom-info-field-val zoom-info-green-link" style={{ fontSize: '0.72rem', wordBreak: 'break-all', fontWeight: 700, color: '#22c55e' }}>
                           {getShareableLink(false)}
                         </span>
                         <button
                           type="button"
                           className="zoom-info-copy-btn"
                           style={{
-                            background: theme === 'light' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.25)',
-                            borderColor: theme === 'light' ? '#16a34a' : '#4ade80',
-                            color: theme === 'light' ? '#15803d' : '#4ade80',
+                            background: 'rgba(34, 197, 94, 0.2)',
+                            borderColor: '#22c55e',
+                            color: '#22c55e',
                             fontWeight: 700
                           }}
                           onClick={() => copyInviteLink(false)}

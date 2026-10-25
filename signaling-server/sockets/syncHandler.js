@@ -813,6 +813,21 @@ const syncHandler = (io, socket) => {
     }
   });
 
+  socket.on('set-room-passcode', async ({ roomId: rawRoomId, passcode }) => {
+    const canonicalRoomId = getCanonicalRoomId(rawRoomId || socket.roomId);
+    const roomId = canonicalRoomId || sanitizeRoomId(rawRoomId || socket.roomId);
+    const variants = getRoomVariants(roomId);
+    if (roomId && passcode) {
+      const cleanP = String(passcode).trim();
+      variants.forEach(v => roomPasscodes.set(v, cleanP));
+      try {
+        await Room.findOneAndUpdate({ roomId }, { $set: { passcode: cleanP } });
+      } catch (e) {}
+      io.to(roomId).emit('room-passcode', { passcode: cleanP });
+      console.log(`🔐 Passcode updated to "${cleanP}" in room: ${roomId}`);
+    }
+  });
+
   // ── AI Lecture Quiz Sync & Live Leaderboard ──
   socket.on('publish-quiz', (data) => {
     const variants = getRoomVariants(data?.roomId || socket.roomId);
